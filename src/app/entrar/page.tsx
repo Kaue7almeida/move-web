@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 import type { MeNextStep, MeResponse } from "@/bff/modules/profile/types";
 import { authenticatedFetch, readApiErrorMessage } from "@/services/api/authenticatedFetch";
@@ -39,7 +39,16 @@ function resolvePostLoginRoute(
   return "/onboarding";
 }
 
+/** useSearchParams exige um Suspense boundary no prerender estatico. */
 export default function EntrarPage() {
+  return (
+    <Suspense fallback={null}>
+      <EntrarPageContent />
+    </Suspense>
+  );
+}
+
+function EntrarPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = getSupabaseBrowserClient();

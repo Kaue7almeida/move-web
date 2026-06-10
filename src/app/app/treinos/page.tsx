@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Dumbbell,
@@ -2855,5 +2855,12 @@ function StudentWorkoutsPage() {
 export default function WorkoutsPage() {
   const { isTrainer } = useAppShell();
 
-  return isTrainer ? <TrainerWorkoutsPage /> : <StudentWorkoutsPage />;
+  // StudentWorkoutsPage usa useSearchParams, que exige Suspense no prerender.
+  return isTrainer ? (
+    <TrainerWorkoutsPage />
+  ) : (
+    <Suspense fallback={null}>
+      <StudentWorkoutsPage />
+    </Suspense>
+  );
 }

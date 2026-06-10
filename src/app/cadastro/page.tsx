@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 import { getSupabaseBrowserClient } from "@/services/auth/supabaseClient";
 
@@ -20,7 +20,16 @@ function getRedirectParam(searchParams: URLSearchParams): string | null {
   return redirect;
 }
 
+/** useSearchParams exige um Suspense boundary no prerender estatico. */
 export default function CadastroPage() {
+  return (
+    <Suspense fallback={null}>
+      <CadastroPageContent />
+    </Suspense>
+  );
+}
+
+function CadastroPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = getSupabaseBrowserClient();

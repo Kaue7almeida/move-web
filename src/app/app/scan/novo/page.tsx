@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -185,7 +185,16 @@ function getErrorCopyByCode(code: string | undefined): string {
 
 const TOTAL_PREP = SCAN_PREP_ITEMS.length;
 
+/** useSearchParams exige um Suspense boundary no prerender estatico. */
 export default function ScanWizardPage() {
+  return (
+    <Suspense fallback={null}>
+      <ScanWizardPageContent />
+    </Suspense>
+  );
+}
+
+function ScanWizardPageContent() {
   const { me } = useAppShell();
   const router = useRouter();
   const searchParams = useSearchParams();

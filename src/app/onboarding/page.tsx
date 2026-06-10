@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import type { MeNextStep, MeResponse, OnboardingRole } from "@/bff/modules/profile/types";
 import {
@@ -288,7 +288,16 @@ function MultiChoiceGroup({
   );
 }
 
+/** useSearchParams exige um Suspense boundary no prerender estatico. */
 export default function OnboardingPage() {
+  return (
+    <Suspense fallback={null}>
+      <OnboardingPageContent />
+    </Suspense>
+  );
+}
+
+function OnboardingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = getSupabaseBrowserClient();
