@@ -32,7 +32,6 @@ export default function CadastroPage() {
 function CadastroPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = getSupabaseBrowserClient();
   const redirectTo = getRedirectParam(searchParams);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -50,6 +49,16 @@ function CadastroPageContent() {
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsSubmitting(true);
+
+    let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch {
+      setErrorMessage("Configuracao do Supabase ausente.");
+      setIsSubmitting(false);
+      return;
+    }
 
     const { data, error } = await supabase.auth.signUp({
       email,

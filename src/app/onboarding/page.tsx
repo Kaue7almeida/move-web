@@ -300,9 +300,9 @@ export default function OnboardingPage() {
 function OnboardingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = getSupabaseBrowserClient();
   const fullNameFromQuery = searchParams.get("fullName") ?? undefined;
   const redirectTo = getRedirectParam(searchParams);
+  const loginHref = redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar";
   const [me, setMe] = useState<MeResponse | null>(null);
   const [studentFormState, setStudentFormState] =
     useState<StudentOnboardingFormState>(emptyStudentFormState);
@@ -320,14 +320,37 @@ function OnboardingPageContent() {
     setTrainerFormState(createTrainerFormState(currentMe, fullNameFromQuery));
   }
 
+  async function signOutAndRedirect() {
+    try {
+      await getSupabaseBrowserClient().auth.signOut();
+    } catch {
+      // If auth configuration is unavailable, still send the user back to login.
+    } finally {
+      router.replace(loginHref);
+    }
+  }
+
   useEffect(() => {
     let isMounted = true;
 
     async function loadCurrentUser() {
+      let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+
+      try {
+        supabase = getSupabaseBrowserClient();
+      } catch {
+        if (isMounted) {
+          setErrorMessage("Configuracao do Supabase ausente.");
+          setIsLoading(false);
+        }
+
+        return;
+      }
+
       const { data } = await supabase.auth.getSession();
 
       if (!data.session?.access_token) {
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        router.replace(loginHref);
         return;
       }
 
@@ -339,7 +362,7 @@ function OnboardingPageContent() {
 
         if (response.status === 401) {
           await supabase.auth.signOut();
-          router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+          router.replace(loginHref);
           return;
         }
 
@@ -370,7 +393,7 @@ function OnboardingPageContent() {
         }
       } catch (error: unknown) {
         if (error instanceof UnauthenticatedRequestError) {
-          router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+          router.replace(loginHref);
           return;
         }
 
@@ -387,7 +410,7 @@ function OnboardingPageContent() {
       isMounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullNameFromQuery, redirectTo, router, searchParams, supabase]);
+  }, [fullNameFromQuery, loginHref, redirectTo, router]);
 
   async function handleRoleSelection(role: OnboardingRole) {
     setErrorMessage(null);
@@ -409,8 +432,7 @@ function OnboardingPageContent() {
       });
 
       if (response.status === 401) {
-        await supabase.auth.signOut();
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        await signOutAndRedirect();
         return;
       }
 
@@ -431,7 +453,7 @@ function OnboardingPageContent() {
       applyMeState(updatedMe);
     } catch (error: unknown) {
       if (error instanceof UnauthenticatedRequestError) {
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        router.replace(loginHref);
         return;
       }
 
@@ -482,8 +504,7 @@ function OnboardingPageContent() {
       });
 
       if (response.status === 401) {
-        await supabase.auth.signOut();
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        await signOutAndRedirect();
         return;
       }
 
@@ -503,7 +524,7 @@ function OnboardingPageContent() {
       applyMeState(updatedMe);
     } catch (error: unknown) {
       if (error instanceof UnauthenticatedRequestError) {
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        router.replace(loginHref);
         return;
       }
 
@@ -547,8 +568,7 @@ function OnboardingPageContent() {
       });
 
       if (response.status === 401) {
-        await supabase.auth.signOut();
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        await signOutAndRedirect();
         return;
       }
 
@@ -569,7 +589,7 @@ function OnboardingPageContent() {
       applyMeState(updatedMe);
     } catch (error: unknown) {
       if (error instanceof UnauthenticatedRequestError) {
-        router.replace(redirectTo ? `/entrar?redirect=${encodeURIComponent(redirectTo)}` : "/entrar");
+        router.replace(loginHref);
         return;
       }
 

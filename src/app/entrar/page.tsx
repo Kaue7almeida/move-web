@@ -51,7 +51,6 @@ export default function EntrarPage() {
 function EntrarPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = getSupabaseBrowserClient();
   const redirectTo = getRedirectParam(searchParams);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -66,6 +65,16 @@ function EntrarPageContent() {
     event.preventDefault();
     setErrorMessage(null);
     setIsSubmitting(true);
+
+    let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+
+    try {
+      supabase = getSupabaseBrowserClient();
+    } catch {
+      setErrorMessage("Configuracao do Supabase ausente.");
+      setIsSubmitting(false);
+      return;
+    }
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,

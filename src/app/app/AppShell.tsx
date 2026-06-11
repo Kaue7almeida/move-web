@@ -371,7 +371,6 @@ function MobileOverlayMenu({
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const supabase = getSupabaseBrowserClient();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -384,6 +383,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     let isMounted = true;
 
     async function loadMe() {
+      let supabase: ReturnType<typeof getSupabaseBrowserClient>;
+
+      try {
+        supabase = getSupabaseBrowserClient();
+      } catch {
+        if (isMounted) {
+          setErrorMessage("Configuracao do Supabase ausente.");
+          setIsLoading(false);
+        }
+
+        return;
+      }
+
       const { data } = await supabase.auth.getSession();
 
       if (!data.session?.access_token) {
@@ -446,12 +458,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [router, supabase]);
+  }, [router]);
 
   async function handleSignOut() {
     setIsSigningOut(true);
-    await supabase.auth.signOut();
-    router.replace("/entrar");
+
+    try {
+      await getSupabaseBrowserClient().auth.signOut();
+    } catch {
+      // If auth configuration is unavailable, still send the user out of the app shell.
+    } finally {
+      router.replace("/entrar");
+    }
   }
 
   const refreshMe = useCallback(async () => {
