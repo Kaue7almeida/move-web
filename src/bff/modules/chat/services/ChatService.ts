@@ -851,7 +851,30 @@ export class ChatService {
       throw CONVERSATION_NOT_FOUND;
     }
 
-    return this.chatRepository.listMessages(conversationId);
+    const messages = await this.chatRepository.listMessages(conversationId);
+
+    if (conversation.conversationType !== "trainer_chat") {
+      return messages;
+    }
+
+    // Annotate human messages with the sender's display name so the UI can
+    // show real names instead of role labels. Best-effort (names may be null).
+    const participantNames = await this.resolveTrainerChatParticipantNames(conversation);
+
+    return messages.map((message) => {
+      if (message.role !== "user" || !message.senderUserId) {
+        return message;
+      }
+
+      const senderName =
+        message.senderUserId === conversation.trainerUserId
+          ? participantNames.trainerName
+          : message.senderUserId === conversation.studentUserId
+            ? participantNames.studentName
+            : null;
+
+      return senderName ? { ...message, senderName } : message;
+    });
   }
 
   async getTrainerAiSettings(userId: string): Promise<TrainerAiSettingsView> {

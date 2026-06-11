@@ -16,6 +16,7 @@ import {
   ArrowLeft,
   Bed,
   CalendarCheck,
+  ChevronDown,
   Clock,
   Coffee,
   HelpCircle,
@@ -444,18 +445,27 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const isAiMessage = message.role === "assistant";
   const isOtherUserMessage = message.role === "user" && !isMyMessage;
   const isRight = isMyMessage;
+  // IA do personal tem identidade visual própria (ciano) para não se confundir
+  // com o laranja da marca nem com o participante humano oposto.
+  const isTrainerAiMessage = isAiMessage && message.assistantType === "trainer_ai";
 
   let leftLabel = "";
   if (isAiMessage) {
     leftLabel = message.assistantType === "trainer_ai" ? "IA do Personal" : "IA Move";
   } else if (isOtherUserMessage) {
-    leftLabel = isTrainer ? "Aluno" : "Personal";
+    // Nome real do sender quando disponível; papel como fallback.
+    leftLabel = message.senderName?.trim() || (isTrainer ? "Aluno" : "Personal");
   }
 
   return (
     <div className={["flex gap-2", isRight ? "justify-end" : "justify-start"].join(" ")}>
       {!isRight && (
-        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-muted text-accent">
+        <div
+          className={[
+            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+            isTrainerAiMessage ? "bg-cyan-500/10 text-cyan-500" : "bg-accent-muted text-accent",
+          ].join(" ")}
+        >
           {isAiMessage ? <Sparkles size={12} strokeWidth={2} /> : <User size={12} strokeWidth={2} />}
         </div>
       )}
@@ -464,11 +474,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           "max-w-[84%] rounded-2xl px-4 py-3 text-sm leading-relaxed sm:max-w-[72%]",
           isRight
             ? "rounded-br-sm bg-accent text-accent-on"
-            : "rounded-bl-sm border border-border bg-surface text-foreground",
+            : isTrainerAiMessage
+              ? "rounded-bl-sm border border-cyan-500/25 bg-surface text-foreground"
+              : "rounded-bl-sm border border-border bg-surface text-foreground",
         ].join(" ")}
       >
         {!isRight && leftLabel && (
-          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-accent">
+          <p
+            className={[
+              "mb-1.5 text-[10px] font-bold uppercase tracking-[0.16em]",
+              isTrainerAiMessage ? "text-cyan-500" : "text-accent",
+            ].join(" ")}
+          >
             {leftLabel}
           </p>
         )}
@@ -483,15 +500,28 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 }
 
 /* ─── "respondendo..." indicator ─── */
-function RespondingIndicator({ label }: { label: string }) {
+function RespondingIndicator({ label, isTrainerAi }: { label: string; isTrainerAi?: boolean }) {
   return (
     <div className="flex gap-2">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-muted text-accent">
+      <div
+        className={[
+          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+          isTrainerAi ? "bg-cyan-500/10 text-cyan-500" : "bg-accent-muted text-accent",
+        ].join(" ")}
+      >
         <Sparkles size={12} strokeWidth={2} />
       </div>
-      <div className="rounded-2xl rounded-bl-sm border border-border bg-surface px-4 py-3">
+      <div
+        className={[
+          "rounded-2xl rounded-bl-sm border bg-surface px-4 py-3",
+          isTrainerAi ? "border-cyan-500/25" : "border-border",
+        ].join(" ")}
+      >
         <div className="flex items-center gap-2">
-          <Loader2 size={13} className="animate-spin text-accent" />
+          <Loader2
+            size={13}
+            className={["animate-spin", isTrainerAi ? "text-cyan-500" : "text-accent"].join(" ")}
+          />
           <span className="text-sm text-muted">{label}</span>
         </div>
       </div>
@@ -558,6 +588,7 @@ function ConversationPanel({
   isLoading,
   showResponding,
   respondingLabel,
+  respondingIsTrainerAi,
   draftHint,
   contextHint,
   sendError,
@@ -578,6 +609,7 @@ function ConversationPanel({
   isLoading: boolean;
   showResponding: boolean;
   respondingLabel: string;
+  respondingIsTrainerAi?: boolean;
   draftHint: string | null;
   contextHint: string | null;
   sendError: string | null;
@@ -660,7 +692,9 @@ function ConversationPanel({
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
-            {showResponding && <RespondingIndicator label={respondingLabel} />}
+            {showResponding && (
+              <RespondingIndicator label={respondingLabel} isTrainerAi={respondingIsTrainerAi} />
+            )}
           </div>
         )}
       </div>
@@ -689,17 +723,23 @@ function StarterGrid({
   starters,
   isBusy,
   onStarterClick,
+  showHeading = true,
 }: {
   starters: PublicChatStarter[];
   isBusy: boolean;
   onStarterClick: (s: PublicChatStarter) => void;
+  showHeading?: boolean;
 }) {
   const moveAiStarters = starters.filter((s) => s.target === "move_ai");
   if (moveAiStarters.length === 0) return null;
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">Temas sugeridos</p>
+      {showHeading && (
+        <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
+          Temas sugeridos
+        </p>
+      )}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {moveAiStarters.map((starter) => (
           <button
@@ -719,6 +759,63 @@ function StarterGrid({
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ─── Mobile: starters recolhidos para não dominar o topo do hub ─── */
+function MobileStartersSection({
+  starters,
+  isBusy,
+  onStarterClick,
+}: {
+  starters: PublicChatStarter[];
+  isBusy: boolean;
+  onStarterClick: (s: PublicChatStarter) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const moveAiStarters = starters.filter((s) => s.target === "move_ai");
+  if (moveAiStarters.length === 0) return null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-surface">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-muted text-accent">
+            <Sparkles size={15} strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-foreground">
+              Sugestões de conversa
+            </span>
+            <span className="block truncate text-xs text-muted">
+              Comece com um tema pronto para a IA Move
+            </span>
+          </span>
+        </span>
+        <ChevronDown
+          size={16}
+          className={[
+            "shrink-0 text-muted transition-transform",
+            isOpen ? "rotate-180" : "",
+          ].join(" ")}
+        />
+      </button>
+      {isOpen && (
+        <div className="border-t border-border p-3">
+          <StarterGrid
+            starters={starters}
+            isBusy={isBusy}
+            onStarterClick={onStarterClick}
+            showHeading={false}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1722,7 +1819,10 @@ function ChatPageContent() {
       {/* ───────────── Mobile ───────────── */}
       <div className="lg:hidden">
         {mobileView === "chat" && hasActiveTarget ? (
-          <div className="h-[calc(100svh-176px)] overflow-hidden rounded-2xl border border-border bg-surface">
+          /* Tela cheia no mobile: anula o padding do AppShell (px-4 pt-6 pb-24)
+             e ocupa a altura entre o header (56px) e a bottom nav (~55px +
+             safe-area). Em sm+ volta ao card com borda do layout atual. */
+          <div className="-mx-4 -mt-6 -mb-24 h-[calc(100dvh-111px-env(safe-area-inset-bottom))] overflow-hidden bg-surface sm:mx-0 sm:mt-0 sm:mb-0 sm:h-[calc(100svh-176px)] sm:rounded-2xl sm:border sm:border-border">
             <ConversationPanel
               title={panelTitle}
               subtitle={panelSubtitle}
@@ -1734,6 +1834,7 @@ function ChatPageContent() {
               isLoading={isLoadingActive}
               showResponding={showResponding}
               respondingLabel={respondingLabel}
+              respondingIsTrainerAi={isTrainerChatActive}
               draftHint={draftHint}
               contextHint={contextHint}
               sendError={sendError}
@@ -1757,11 +1858,7 @@ function ChatPageContent() {
               onOpenPicker={() => setIsPickerOpen(true)}
               onStartWithTrainer={startTrainerChatWithTrainer}
             />
-            <HubWelcome
-              starters={starters}
-              isBusy={isBusy}
-              onStarterClick={(s) => void handleStarterClick(s)}
-            />
+            {/* Prioridade mobile: conversas primeiro; starters recolhidos abaixo. */}
             <div className="space-y-2">
               <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
                 Conversas recentes
@@ -1773,6 +1870,11 @@ function ChatPageContent() {
                 onSelect={selectConversation}
               />
             </div>
+            <MobileStartersSection
+              starters={starters}
+              isBusy={isBusy}
+              onStarterClick={(s) => void handleStarterClick(s)}
+            />
           </div>
         )}
       </div>
@@ -1816,6 +1918,7 @@ function ChatPageContent() {
                 isLoading={isLoadingActive}
                 showResponding={showResponding}
                 respondingLabel={respondingLabel}
+                respondingIsTrainerAi={isTrainerChatActive}
                 draftHint={draftHint}
                 contextHint={contextHint}
                 sendError={sendError}

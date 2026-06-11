@@ -36,6 +36,8 @@ export type ChatMessage = {
   conversationId: string;
   role: ChatMessageRole;
   senderUserId: string | null;
+  /** Display name of the human sender (derived from profiles, not persisted). */
+  senderName?: string | null;
   assistantType: ChatAssistantType | null;
   isAiGenerated: boolean;
   content: string;
