@@ -66,3 +66,21 @@ export type ListNotificationsOptions = {
   limit: number;
   unreadOnly: boolean;
 };
+
+/** Lookup key for an existing unread notification to coalesce into. */
+export type FindUnreadNotificationByTargetInput = {
+  recipientUserId: string;
+  type: NotificationType;
+  targetEntityId: string;
+};
+
+/** Content patch applied when coalescing a new event into an unread row. */
+export type UpdateGroupedNotificationInput = {
+  notificationId: string;
+  actorUserId: string | null;
+  title: string;
+  body: string | null;
+  metadata: Json;
+  /** Bumped so the grouped row resurfaces as the most recent notification. */
+  createdAt: string;
+};

@@ -80,6 +80,12 @@ const RELATIONSHIP_CHECK_FAILED = new ApiError(
   "Não foi possível verificar o vínculo aluno-personal.",
 );
 
+const PROFILE_NAMES_QUERY_FAILED = new ApiError(
+  500,
+  "chat_profile_names_query_failed",
+  "Não foi possível carregar os participantes da conversa.",
+);
+
 /* ─── Limits ─────────────────────────────────────────────────────────────────── */
 
 const DEFAULT_MESSAGES_LIMIT = 50;
@@ -439,6 +445,36 @@ export class ChatRepository implements IChatRepository {
     }
 
     return (data ?? []).map(mapMessageRow).reverse();
+  }
+
+  /* ── profiles ── */
+
+  async getProfileNames(userIds: string[]): Promise<Record<string, string>> {
+    const uniqueIds = [...new Set(userIds.filter(Boolean))];
+
+    if (uniqueIds.length === 0) {
+      return {};
+    }
+
+    const { data, error } = await this.supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", uniqueIds);
+
+    if (error) {
+      throw PROFILE_NAMES_QUERY_FAILED;
+    }
+
+    const names: Record<string, string> = {};
+
+    for (const row of data ?? []) {
+      const fullName = row.full_name?.trim();
+      if (fullName) {
+        names[row.id] = fullName;
+      }
+    }
+
+    return names;
   }
 
   /* ── trainer_ai_settings ── */

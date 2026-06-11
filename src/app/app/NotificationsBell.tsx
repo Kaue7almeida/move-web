@@ -19,6 +19,33 @@ const TYPE_ICON: Record<NotificationType, typeof MessageCircle> = {
   workout_assigned: Dumbbell,
 };
 
+/** Reads metadata.conversationId (Json-safe), falling back to targetEntityId. */
+function readConversationId(notification: AppNotification): string | null {
+  const metadata = notification.metadata;
+  if (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    !Array.isArray(metadata) &&
+    typeof metadata.conversationId === "string" &&
+    metadata.conversationId
+  ) {
+    return metadata.conversationId;
+  }
+  return notification.targetEntityId;
+}
+
+/** Chat notifications deep-link to their conversation (covers legacy rows
+ *  created with a plain "/app/chat" target_path). */
+function resolveTargetPath(notification: AppNotification): string | null {
+  if (notification.type === "chat_message_received") {
+    const conversationId = readConversationId(notification);
+    if (conversationId) {
+      return `/app/chat?conversationId=${encodeURIComponent(conversationId)}`;
+    }
+  }
+  return notification.targetPath;
+}
+
 function formatWhen(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
@@ -130,8 +157,9 @@ export function NotificationsBell() {
       });
     }
 
-    if (notification.targetPath) {
-      router.push(notification.targetPath);
+    const targetPath = resolveTargetPath(notification);
+    if (targetPath) {
+      router.push(targetPath);
     }
   }
 

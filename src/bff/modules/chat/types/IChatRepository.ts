@@ -85,6 +85,10 @@ export interface IChatRepository {
   listRecentMessagesForPrompt(conversationId: string, limit?: number): Promise<ChatMessage[]>;
   countMessagesForConversation(conversationId: string): Promise<number>;
 
+  // ── profiles ──
+  /** Maps user id → display name (profiles.full_name); ids without name are omitted. */
+  getProfileNames(userIds: string[]): Promise<Record<string, string>>;
+
   // ── trainer_ai_settings ──
   hasTrainerProfile(userId: string): Promise<boolean>;
   getTrainerAiSettings(trainerUserId: string): Promise<TrainerAiSettings | null>;

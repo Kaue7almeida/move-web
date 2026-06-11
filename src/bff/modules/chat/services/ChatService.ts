@@ -128,6 +128,12 @@ type TrainerChatParticipants = {
   trainerUserId: string;
 };
 
+/** Display names used only inside the trainer AI prompt (never sent to the front). */
+type TrainerChatParticipantNames = {
+  studentName: string | null;
+  trainerName: string | null;
+};
+
 const CONVERSATION_NOT_FOUND = new ApiError(
   404,
   "chat_conversation_not_found",
@@ -528,6 +534,7 @@ function toPromptMessage(
 function toTrainerPromptMessage(
   message: ChatMessage,
   conversation: ChatConversation,
+  participantNames: TrainerChatParticipantNames,
 ): ChatPromptMessage {
   if (message.role === "assistant") {
     return {
@@ -536,10 +543,12 @@ function toTrainerPromptMessage(
     };
   }
 
-  const senderLabel =
-    message.senderUserId === conversation.trainerUserId
-      ? "Personal humano"
-      : "Aluno";
+  const senderIsTrainer = message.senderUserId === conversation.trainerUserId;
+  const baseLabel = senderIsTrainer ? "Personal humano" : "Aluno";
+  const senderName = senderIsTrainer
+    ? participantNames.trainerName
+    : participantNames.studentName;
+  const senderLabel = senderName ? `${baseLabel} (${senderName})` : baseLabel;
 
   return {
     role: "user",
@@ -617,17 +626,31 @@ function canAutoReplyWithTrainerAi(input: {
   );
 }
 
-function buildTrainerAiSystemPrompt(settings: TrainerAiSettings): string {
+function buildTrainerAiSystemPrompt(
+  settings: TrainerAiSettings,
+  participantNames: TrainerChatParticipantNames,
+): string {
   const preferredExercises = normalizePreferredExercisesOutput(
     settings.preferredExercises,
   );
+  const trainerLabel = participantNames.trainerName ?? "o personal";
+  const studentLabel = participantNames.studentName ?? "o aluno";
 
   const lines = [
     "Voce e uma IA auxiliar do personal dentro do Move.",
+    "",
+    "Participantes desta conversa:",
+    `- Personal (humano): ${participantNames.trainerName ?? "nome nao informado"}.`,
+    `- Aluno: ${participantNames.studentName ?? "nome nao informado"}.`,
+    `Esta conversa e entre ${studentLabel} e ${trainerLabel}, e voce responde como IA auxiliar de ${trainerLabel}.`,
+    "",
     "Responda sempre em portugues do Brasil.",
     "Seja curta, pratica e acolhedora.",
     "Deixe claro que voce e uma IA auxiliar do personal, nao o personal humano.",
     "Nao finja ser o personal humano.",
+    "Use o historico recente desta conversa como contexto.",
+    "Nao invente dados que nao estejam no historico desta conversa ou nesta configuracao.",
+    "Se faltar informacao para responder, peca um esclarecimento breve ao aluno.",
     "Nao prometa resultado.",
     "Nao diagnostique lesao ou doenca.",
     "Nao prescreva remedio.",
@@ -766,7 +789,9 @@ export class ChatService {
     }
 
     try {
-      await this.notificationService.notifyUser({
+      // Grouped: while unread, new messages of the SAME conversation update the
+      // existing notification (messageCount em metadata) instead of piling up.
+      await this.notificationService.notifyUserGrouped({
         recipientUserId,
         actorUserId: senderUserId,
         type: "chat_message_received",
@@ -774,12 +799,21 @@ export class ChatService {
         body: senderIsStudent
           ? "Seu aluno enviou uma mensagem"
           : "Seu personal enviou uma mensagem",
-        target: { path: "/app/chat", type: "chat_conversation", entityId: conversation.id },
+        target: {
+          path: `/app/chat?conversationId=${conversation.id}`,
+          type: "chat_conversation",
+          entityId: conversation.id,
+        },
         metadata: {
           conversationId: conversation.id,
           senderRole: senderIsStudent ? "student" : "trainer",
           senderUserId,
         },
+        groupedTitle: () => "Novas mensagens",
+        groupedBody: (count) =>
+          senderIsStudent
+            ? `Seu aluno enviou ${count} mensagens nesta conversa`
+            : `Seu personal enviou ${count} mensagens nesta conversa`,
       });
     } catch {
       // Best-effort.
@@ -1116,20 +1150,23 @@ export class ChatService {
     try {
       await this.chatRepository.touchConversation(input.conversationId);
 
-      const recentMessages = await this.chatRepository.listRecentMessagesForPrompt(
-        input.conversationId,
-        20,
-      );
+      const [recentMessages, participantNames] = await Promise.all([
+        this.chatRepository.listRecentMessagesForPrompt(input.conversationId, 20),
+        this.resolveTrainerChatParticipantNames(conversation),
+      ]);
 
       const assistantContent = await completeTrainerAiMessage({
         chatCompletionClient: this.chatCompletionClient,
         messages: [
           {
             role: "system",
-            content: buildTrainerAiSystemPrompt(autoReplyContext.settings),
+            content: buildTrainerAiSystemPrompt(
+              autoReplyContext.settings,
+              participantNames,
+            ),
           },
           ...recentMessages.map((recentMessage) =>
-            toTrainerPromptMessage(recentMessage, conversation),
+            toTrainerPromptMessage(recentMessage, conversation, participantNames),
           ),
         ],
       });
@@ -1154,6 +1191,34 @@ export class ChatService {
         assistantError: toTrainerAiAssistantError(error),
         conversationState: getConversationState(conversation),
       };
+    }
+  }
+
+  /**
+   * Resolves participant display names for the trainer AI prompt. Best-effort:
+   * a profile lookup failure must not block the auto-reply, so it falls back
+   * to role-only labels (null names).
+   */
+  private async resolveTrainerChatParticipantNames(
+    conversation: ChatConversation,
+  ): Promise<TrainerChatParticipantNames> {
+    try {
+      const names = await this.chatRepository.getProfileNames(
+        [conversation.studentUserId, conversation.trainerUserId].filter(
+          (userId): userId is string => Boolean(userId),
+        ),
+      );
+
+      return {
+        studentName: conversation.studentUserId
+          ? (names[conversation.studentUserId] ?? null)
+          : null,
+        trainerName: conversation.trainerUserId
+          ? (names[conversation.trainerUserId] ?? null)
+          : null,
+      };
+    } catch {
+      return { studentName: null, trainerName: null };
     }
   }
 

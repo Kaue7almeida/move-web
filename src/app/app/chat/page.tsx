@@ -1,6 +1,15 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Activity,
   AlertCircle,
@@ -998,8 +1007,21 @@ function StudentPickerModal({
    Main page
    ───────────────────────────────────────────────────────────────────────────── */
 
+/** useSearchParams exige um Suspense boundary no prerender estatico. */
 export default function ChatPage() {
+  return (
+    <Suspense fallback={<FullLoading />}>
+      <ChatPageContent />
+    </Suspense>
+  );
+}
+
+function ChatPageContent() {
   const { me, isTrainer } = useAppShell();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Deep-link de notificação: /app/chat?conversationId=<id> abre a conversa.
+  const deepLinkConversationId = searchParams.get("conversationId");
 
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1045,6 +1067,9 @@ export default function ChatPage() {
   // Contextual trigger intent (Task 10b): applied once after data is loaded.
   const intentHandledRef = useRef(false);
   const applyIntentRef = useRef<(intent: ChatTriggerIntent) => void>(() => {});
+
+  // Last conversationId applied from the URL (avoids reapplying on every poll).
+  const deepLinkHandledRef = useRef<string | null>(null);
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.id === selectedConversationId) ?? null,
@@ -1143,7 +1168,13 @@ export default function ChatPage() {
     setContextHint(null);
     setPendingSendOverride(null);
     setMobileView("list");
-  }, []);
+    // Limpa o deep-link da URL para que um novo clique na mesma notificação
+    // dispare a seleção de novo (searchParams muda de "" → id).
+    deepLinkHandledRef.current = null;
+    if (searchParams.get("conversationId")) {
+      router.replace("/app/chat", { scroll: false });
+    }
+  }, [router, searchParams]);
 
   const selectConversation = useCallback(
     (conversationId: string) => {
@@ -1169,6 +1200,22 @@ export default function ChatPage() {
     setDraft("");
     setMobileView("chat");
   }, []);
+
+  // Abre a conversa do deep-link assim que a lista estiver carregada. Em
+  // mobile, selectConversation já troca para a view de chat (sem ficar preso
+  // nos starters). Id desconhecido/sem acesso é ignorado: permanece no hub.
+  useEffect(() => {
+    if (loadState !== "ready" || !deepLinkConversationId) return;
+    if (deepLinkHandledRef.current === deepLinkConversationId) return;
+    if (!conversations.some((c) => c.id === deepLinkConversationId)) return;
+    // setTimeout(0): evita setState síncrono dentro do effect (padrão da página).
+    const id = window.setTimeout(() => {
+      if (deepLinkHandledRef.current === deepLinkConversationId) return;
+      deepLinkHandledRef.current = deepLinkConversationId;
+      selectConversation(deepLinkConversationId);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [loadState, deepLinkConversationId, conversations, selectConversation]);
 
   function startMoveAiDraft() {
     openDraft({ conversationType: "move_ai_private", title: "Nova conversa" });

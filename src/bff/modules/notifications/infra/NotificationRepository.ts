@@ -5,8 +5,10 @@ import type { Database } from "@/bff/core/supabase/database.types";
 import type {
   AppNotification,
   CreateNotificationInput,
+  FindUnreadNotificationByTargetInput,
   ListNotificationsOptions,
   NotificationType,
+  UpdateGroupedNotificationInput,
 } from "@/bff/modules/notifications/types";
 import type { INotificationRepository } from "@/bff/modules/notifications/types/INotificationRepository";
 
@@ -72,6 +74,55 @@ export class NotificationRepository implements INotificationRepository {
     }
 
     return mapRow(data);
+  }
+
+  async findUnreadByTarget(
+    input: FindUnreadNotificationByTargetInput,
+  ): Promise<AppNotification | null> {
+    const { data, error } = await this.supabase
+      .from("notifications")
+      .select("*")
+      .eq("recipient_user_id", input.recipientUserId)
+      .eq("type", input.type)
+      .eq("target_entity_id", input.targetEntityId)
+      .is("read_at", null)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw NOTIFICATION_QUERY_FAILED;
+    }
+
+    return data ? mapRow(data) : null;
+  }
+
+  async updateGroupedNotification(
+    input: UpdateGroupedNotificationInput,
+  ): Promise<AppNotification | null> {
+    // read_at/deleted_at guards keep a just-read notification read: if the row
+    // changed meanwhile, no row matches and the caller creates a fresh one.
+    const { data, error } = await this.supabase
+      .from("notifications")
+      .update({
+        actor_user_id: input.actorUserId,
+        title: input.title,
+        body: input.body,
+        metadata: input.metadata,
+        created_at: input.createdAt,
+      })
+      .eq("id", input.notificationId)
+      .is("read_at", null)
+      .is("deleted_at", null)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw NOTIFICATION_UPDATE_FAILED;
+    }
+
+    return data ? mapRow(data) : null;
   }
 
   async listForUser(
