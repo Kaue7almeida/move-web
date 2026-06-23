@@ -257,6 +257,38 @@ export class ProfileRepository implements IProfileRepository {
     return count ?? 0;
   }
 
+  async countActiveWorkoutsByTrainerForStudents(
+    trainerUserId: string,
+    studentUserIds: string[],
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+
+    if (studentUserIds.length === 0) {
+      return counts;
+    }
+
+    const { data, error } = await this.supabase
+      .from("student_workouts")
+      .select("student_user_id")
+      .eq("trainer_user_id", trainerUserId)
+      .in("student_user_id", studentUserIds)
+      .in("status", ["active", "pending"]);
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "student_workouts_count_failed",
+        "Não foi possível contar os treinos dos alunos.",
+      );
+    }
+
+    for (const row of data ?? []) {
+      counts.set(row.student_user_id, (counts.get(row.student_user_id) ?? 0) + 1);
+    }
+
+    return counts;
+  }
+
   async findOpenRelationshipByPair(
     studentUserId: string,
     trainerUserId: string,

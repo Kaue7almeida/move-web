@@ -181,12 +181,18 @@ export class ProfileService {
 
     const results = await this.profileRepository.findStudentProfilesForTrainer(identity.userId);
 
+    const workoutCounts = await this.profileRepository.countActiveWorkoutsByTrainerForStudents(
+      identity.userId,
+      results.map(({ relationship }) => relationship.student_user_id),
+    );
+
     const students = results.map(({ relationship, profile }) => ({
       userId: relationship.student_user_id,
       fullName: profile?.full_name?.trim() || "Aluno sem nome",
       email: profile?.email?.trim() || "",
       status: relationship.status,
       createdAt: relationship.created_at,
+      activeWorkoutCount: workoutCounts.get(relationship.student_user_id) ?? 0,
     }));
 
     return { students };

@@ -78,6 +78,10 @@ export interface IWorkoutRepository {
   listWorkoutSessionSetsBySessionIds(sessionIds: string[]): Promise<WorkoutSessionSetRecord[]>;
   findStudentWorkoutsByIds(studentWorkoutIds: string[]): Promise<StudentWorkoutRecord[]>;
   listActiveStudentsForTrainer(trainerUserId: string): Promise<TrainerActiveStudent[]>;
+  listStudentWorkoutsForTrainerAndStudent(
+    trainerUserId: string,
+    studentUserId: string,
+  ): Promise<StudentWorkoutRecord[]>;
   listCompletedSessionsForTrainer(trainerUserId: string): Promise<WorkoutSessionRecord[]>;
   listCompletedSessionsForTrainerAndStudent(
     trainerUserId: string,

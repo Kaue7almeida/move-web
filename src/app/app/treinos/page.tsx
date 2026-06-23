@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -126,7 +127,7 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={[
-        "inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium",
+        "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium",
         config.className,
       ].join(" ")}
     >
@@ -166,7 +167,7 @@ function WorkoutCard({
           </p>
         )}
         <div className="mt-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 text-[11px] text-muted">
+          <div className="flex items-center gap-3 text-xs text-muted">
             <span>{workout.exerciseCount} exercício{workout.exerciseCount !== 1 ? "s" : ""}</span>
             <span className="text-border">·</span>
             <span>{formatDate(workout.createdAt)}</span>
@@ -580,13 +581,13 @@ function AssignWorkoutModal({
                       Adicione alunos na aba Alunos para aplicar treinos.
                     </p>
                   </div>
-                  <a
+                  <Link
                     href="/app/alunos"
                     className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-accent-on transition-colors hover:bg-accent-hover"
                   >
                     Ir para Alunos
                     <ArrowRight size={12} />
-                  </a>
+                  </Link>
                 </div>
               )}
 

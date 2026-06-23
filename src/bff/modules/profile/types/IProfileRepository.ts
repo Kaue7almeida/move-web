@@ -20,6 +20,14 @@ export interface IProfileRepository {
   findRelationshipsByUserId(userId: string): Promise<StudentTrainerRelationshipRecord[]>;
   countAssignedWorkoutsForStudent(studentUserId: string): Promise<number>;
   countCompletedSessionsForStudent(studentUserId: string): Promise<number>;
+  /**
+   * Counts active+pending student_workouts assigned BY this trainer, grouped by
+   * student. Returns a map keyed by student_user_id (missing key = 0 workouts).
+   */
+  countActiveWorkoutsByTrainerForStudents(
+    trainerUserId: string,
+    studentUserIds: string[],
+  ): Promise<Map<string, number>>;
   findStudentProfilesForTrainer(
     trainerUserId: string,
   ): Promise<

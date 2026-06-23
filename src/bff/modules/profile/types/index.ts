@@ -162,6 +162,8 @@ export type TrainerStudentListItem = {
   email: string;
   status: string;
   createdAt: string;
+  /** Treinos atribuídos por este personal (active + pending). 0 = sem treino. */
+  activeWorkoutCount: number;
 };
 
 export type TrainerStudentListResponse = {

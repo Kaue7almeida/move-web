@@ -230,8 +230,8 @@ export function EmptyState({
       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent-muted">
         <Icon size={24} className="text-accent" strokeWidth={1.5} />
       </div>
-      <h3 className="mt-4 text-sm font-semibold text-foreground">{title}</h3>
-      <p className="mt-1.5 max-w-sm text-xs leading-relaxed text-muted">
+      <h3 className="mt-4 text-base font-semibold text-foreground">{title}</h3>
+      <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-muted">
         {description}
       </p>
       {action && (

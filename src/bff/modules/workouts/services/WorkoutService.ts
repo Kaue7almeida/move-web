@@ -33,6 +33,7 @@ import type {
   StudentWorkoutStatus,
   StudentWorkoutSummary,
   TrainerStudentsActivityResponse,
+  TrainerStudentWorkoutsResponse,
   TrainerWorkoutDetailResponse,
   TrainerWorkoutListResponse,
   UpdateWorkoutGalleryInput,
@@ -1314,6 +1315,53 @@ export class WorkoutService {
     });
 
     return { students: activity };
+  }
+
+  async getTrainerStudentWorkouts(
+    identity: CurrentUserIdentity,
+    studentUserId: string,
+  ): Promise<TrainerStudentWorkoutsResponse> {
+    await this.requireTrainerAccess(identity);
+
+    // Single source of truth for ownership AND student identity: the student must
+    // appear among this trainer's active students, otherwise it's a 403.
+    const activeStudents = await this.workoutRepository.listActiveStudentsForTrainer(identity.userId);
+    const student = activeStudents.find((candidate) => candidate.userId === studentUserId);
+
+    if (!student) {
+      throw new ApiError(
+        403,
+        "student_relationship_required",
+        "Esse aluno não está vinculado ativamente a você.",
+      );
+    }
+
+    const workoutRecords = await this.workoutRepository.listStudentWorkoutsForTrainerAndStudent(
+      identity.userId,
+      studentUserId,
+    );
+    const workoutIds = workoutRecords.map((workout) => workout.id);
+    const exercises = await this.workoutRepository.listStudentWorkoutExercisesByWorkoutIds(workoutIds);
+
+    const countByWorkoutId = new Map<string, number>();
+
+    for (const exercise of exercises) {
+      countByWorkoutId.set(
+        exercise.student_workout_id,
+        (countByWorkoutId.get(exercise.student_workout_id) ?? 0) + 1,
+      );
+    }
+
+    return {
+      student: {
+        userId: student.userId,
+        fullName: student.fullName,
+        email: student.email,
+      },
+      workouts: workoutRecords.map((workout) =>
+        mapStudentWorkoutSummaryFromRecord(workout, countByWorkoutId.get(workout.id) ?? 0),
+      ),
+    };
   }
 
   async listTrainerStudentWorkoutSessions(

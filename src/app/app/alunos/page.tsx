@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
-import { Users, UserPlus, UserCheck, Clock, Mail, User as UserIcon, RefreshCw, Link2, Copy, Check, MoreVertical } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Users, UserPlus, UserCheck, Clock, Mail, User as UserIcon, RefreshCw, Link2, Copy, Check, MoreVertical, Search, X, ChevronRight, Dumbbell, Sparkles } from "lucide-react";
 
 import type {
   TrainerStudentLinkResponse,
@@ -23,6 +24,33 @@ type TrainerStudentFormState = {
   studentName: string;
   studentEmail: string;
 };
+
+type StudentFilter = "all" | "new" | "withoutWorkout";
+type StudentSort = "recent" | "name";
+
+/** Janela para considerar um vínculo "novo". */
+const NEW_STUDENT_WINDOW_DAYS = 14;
+
+function isRecentlyLinked(createdAt: string): boolean {
+  const created = new Date(createdAt).getTime();
+
+  if (Number.isNaN(created)) {
+    return false;
+  }
+
+  const windowMs = NEW_STUDENT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  return Date.now() - created <= windowMs;
+}
+
+function formatLinkDate(iso: string): string | null {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
+}
 
 /* ─── Invite link card ─── */
 function InviteLinkCard({ inviteSlug }: { inviteSlug: string | null }) {
@@ -287,6 +315,51 @@ function AddStudentForm({
   );
 }
 
+/* ─── Status badge ─── */
+function StudentStatusBadge({ status }: { status: string }) {
+  const isActive = status === "active";
+
+  return (
+    <span
+      className={[
+        "inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium",
+        isActive ? "bg-success-soft text-success" : "bg-surface-strong text-muted",
+      ].join(" ")}
+    >
+      {isActive ? (
+        <>
+          <UserCheck size={11} /> Ativo
+        </>
+      ) : (
+        <>
+          <Clock size={11} /> Pendente
+        </>
+      )}
+    </span>
+  );
+}
+
+/* ─── Student meta (treinos + vínculo) ─── */
+function StudentMeta({ student }: { student: TrainerStudentListItem }) {
+  const isActive = student.status === "active";
+  const linkedAt = formatLinkDate(student.createdAt);
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+      {isActive && (
+        <span className="inline-flex items-center gap-1">
+          <Dumbbell size={12} className="text-muted" />
+          {student.activeWorkoutCount > 0
+            ? `${student.activeWorkoutCount} treino${student.activeWorkoutCount !== 1 ? "s" : ""}`
+            : "Sem treino"}
+        </span>
+      )}
+      {isActive && linkedAt && <span className="text-border">·</span>}
+      {linkedAt && <span>Desde {linkedAt}</span>}
+    </div>
+  );
+}
+
 /* ─── Student row ─── */
 function StudentRow({
   student,
@@ -297,39 +370,54 @@ function StudentRow({
 }) {
   const initial = student.fullName.charAt(0).toUpperCase();
   const isActive = student.status === "active";
+  const isNew = isRecentlyLinked(student.createdAt);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const avatar = (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-muted text-sm font-semibold text-accent">
+      {initial}
+    </div>
+  );
+
+  const identity = (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2">
+        <p className="truncate text-sm font-semibold text-foreground">{student.fullName}</p>
+        {isNew && (
+          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-accent">
+            <Sparkles size={9} /> Novo
+          </span>
+        )}
+      </div>
+      <p className="truncate text-sm text-muted">
+        {student.email || "E-mail não disponível"}
+      </p>
+      <StudentMeta student={student} />
+    </div>
+  );
 
   return (
     <div className="card-themed flex items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-muted text-sm font-semibold text-accent">
-        {initial}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">
-          {student.fullName}
-        </p>
-        <p className="truncate text-xs text-muted">
-          {student.email || "E-mail não disponível"}
-        </p>
-      </div>
-      <span
-        className={[
-          "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium",
-          isActive
-            ? "bg-success-soft text-success"
-            : "bg-surface-strong text-muted",
-        ].join(" ")}
-      >
-        {isActive ? (
-          <>
-            <UserCheck size={10} /> Ativo
-          </>
-        ) : (
-          <>
-            <Clock size={10} /> Pendente
-          </>
-        )}
-      </span>
+      {isActive ? (
+        <Link
+          href={`/app/alunos/${student.userId}`}
+          className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg transition-colors"
+        >
+          {avatar}
+          {identity}
+          <ChevronRight
+            size={18}
+            className="shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+          />
+        </Link>
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          {avatar}
+          {identity}
+        </div>
+      )}
+
+      <StudentStatusBadge status={student.status} />
 
       {isActive && (
         <div className="relative shrink-0">
@@ -351,13 +439,19 @@ function StudentRow({
                 role="presentation"
               />
               <div className="absolute right-0 top-9 z-20 w-44 overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
+                <Link
+                  href={`/app/alunos/${student.userId}`}
+                  className="block w-full px-3 py-2.5 text-left text-sm font-medium text-foreground transition-colors hover:bg-surface-hover"
+                >
+                  Ver aluno
+                </Link>
                 <button
                   type="button"
                   onClick={() => {
                     setMenuOpen(false);
                     onRequestRemove(student);
                   }}
-                  className="block w-full px-3 py-2.5 text-left text-xs font-medium text-red-500 transition-colors hover:bg-surface-hover"
+                  className="block w-full px-3 py-2.5 text-left text-sm font-medium text-red-500 transition-colors hover:bg-surface-hover"
                 >
                   Remover aluno
                 </button>
@@ -387,9 +481,7 @@ function StudentList({
   if (isLoading) {
     return (
       <div className="space-y-3">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
-          Seus alunos
-        </h3>
+        <h3 className="text-sm font-semibold text-foreground">Seus alunos</h3>
         <div className="flex items-center justify-center rounded-xl border border-dashed border-border bg-surface/50 py-12">
           <div className="flex flex-col items-center gap-2">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
@@ -403,9 +495,7 @@ function StudentList({
   if (errorMessage) {
     return (
       <div className="space-y-3">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
-          Seus alunos
-        </h3>
+        <h3 className="text-sm font-semibold text-foreground">Seus alunos</h3>
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface/50 px-6 py-12 text-center">
           <p className="text-xs text-red-500">{errorMessage}</p>
           <button
@@ -424,42 +514,177 @@ function StudentList({
   if (students.length === 0) {
     return (
       <div className="space-y-3">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
-          Seus alunos
-        </h3>
+        <h3 className="text-sm font-semibold text-foreground">Seus alunos</h3>
         <EmptyState
           icon={Users}
           title="Nenhum aluno ainda"
-          description="Adicione seu primeiro aluno usando o formulário ao lado. Ele precisa ter uma conta no Move."
+          description="Adicione seu primeiro aluno usando o formulário acima. Ele precisa ter uma conta no Move."
         />
       </div>
     );
   }
 
-  const activeCount = students.filter((s) => s.status === "active").length;
-  const pendingCount = students.filter((s) => s.status === "pending").length;
+  return (
+    <StudentListContent students={students} onRequestRemove={onRequestRemove} />
+  );
+}
+
+/* ─── Student list content (search + filters + sort) ─── */
+const FILTER_OPTIONS: ReadonlyArray<{ key: StudentFilter; label: string }> = [
+  { key: "all", label: "Todos" },
+  { key: "new", label: "Novos" },
+  { key: "withoutWorkout", label: "Sem treino" },
+];
+
+function StudentListContent({
+  students,
+  onRequestRemove,
+}: {
+  students: TrainerStudentListItem[];
+  onRequestRemove: (student: TrainerStudentListItem) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<StudentFilter>("all");
+  const [sort, setSort] = useState<StudentSort>("recent");
+
+  const counts = useMemo(
+    () => ({
+      all: students.length,
+      new: students.filter((student) => isRecentlyLinked(student.createdAt)).length,
+      withoutWorkout: students.filter(
+        (student) => student.status === "active" && student.activeWorkoutCount === 0,
+      ).length,
+    }),
+    [students],
+  );
+
+  const visibleStudents = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    const filtered = students.filter((student) => {
+      if (filter === "new" && !isRecentlyLinked(student.createdAt)) {
+        return false;
+      }
+
+      if (
+        filter === "withoutWorkout"
+        && !(student.status === "active" && student.activeWorkoutCount === 0)
+      ) {
+        return false;
+      }
+
+      if (normalizedQuery) {
+        const haystack = `${student.fullName} ${student.email}`.toLowerCase();
+        return haystack.includes(normalizedQuery);
+      }
+
+      return true;
+    });
+
+    return filtered.sort((left, right) => {
+      if (sort === "name") {
+        return left.fullName.localeCompare(right.fullName, "pt-BR");
+      }
+
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+  }, [students, query, filter, sort]);
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground">
           Seus alunos ({students.length})
         </h3>
-        {activeCount > 0 && pendingCount > 0 && (
-          <p className="text-[10px] text-muted">
-            {activeCount} ativo{activeCount !== 1 ? "s" : ""} · {pendingCount} pendente{pendingCount !== 1 ? "s" : ""}
-          </p>
+      </div>
+
+      {/* Busca */}
+      <div className="relative">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+        <input
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Buscar por nome ou e-mail"
+          aria-label="Buscar aluno"
+          className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-9 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-accent/40 focus:ring-1 focus:ring-accent/20"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            aria-label="Limpar busca"
+            className="absolute right-2 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+          >
+            <X size={15} />
+          </button>
         )}
       </div>
-      <div className="space-y-2">
-        {students.map((student) => (
-          <StudentRow
-            key={student.userId}
-            student={student}
-            onRequestRemove={onRequestRemove}
-          />
-        ))}
+
+      {/* Filtros + ordenação */}
+      <div className="flex flex-wrap items-center gap-2">
+        {FILTER_OPTIONS.map((option) => {
+          const isActive = filter === option.key;
+
+          return (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setFilter(option.key)}
+              className={[
+                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                isActive
+                  ? "border-accent/40 bg-accent-soft text-accent"
+                  : "border-border bg-surface text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+              ].join(" ")}
+            >
+              {option.label}
+              <span className={isActive ? "text-accent" : "text-muted"}>
+                {counts[option.key]}
+              </span>
+            </button>
+          );
+        })}
+
+        <label className="ml-auto inline-flex items-center gap-1.5">
+          <span className="sr-only">Ordenar alunos</span>
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.target.value as StudentSort)}
+            className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-foreground outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/20"
+          >
+            <option value="recent">Mais recentes</option>
+            <option value="name">Nome (A–Z)</option>
+          </select>
+        </label>
       </div>
+
+      {/* Lista */}
+      {visibleStudents.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-surface/50 px-6 py-10 text-center">
+          <p className="text-sm text-muted">Nenhum aluno encontrado com esses filtros.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setFilter("all");
+            }}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-surface-strong px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
+          >
+            Limpar filtros
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visibleStudents.map((student) => (
+            <StudentRow
+              key={student.userId}
+              student={student}
+              onRequestRemove={onRequestRemove}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -577,6 +802,7 @@ export default function StudentsPage() {
       email: payload.student.email,
       status: payload.student.relationshipStatus,
       createdAt: new Date().toISOString(),
+      activeWorkoutCount: 0,
     };
 
     setStudents((current) => [newStudent, ...current]);
@@ -650,24 +876,23 @@ export default function StudentsPage() {
         />
       </div>
 
-      {/* Invite link */}
-      <InviteLinkCard inviteSlug={null} />
-
-      {/* Two-column: form + list */}
+      {/* Setup: convite + adicionar aluno */}
       <div className="grid gap-6 lg:grid-cols-2">
+        <InviteLinkCard inviteSlug={null} />
         <AddStudentForm onStudentAdded={handleStudentAdded} />
-
-        <StudentList
-          students={students}
-          isLoading={isLoadingStudents}
-          errorMessage={listErrorMessage}
-          onRetry={() => void handleRetry()}
-          onRequestRemove={(student) => {
-            setRemoveError(null);
-            setRemovingStudent(student);
-          }}
-        />
       </div>
+
+      {/* Lista de alunos — busca, filtros e ordenação */}
+      <StudentList
+        students={students}
+        isLoading={isLoadingStudents}
+        errorMessage={listErrorMessage}
+        onRetry={() => void handleRetry()}
+        onRequestRemove={(student) => {
+          setRemoveError(null);
+          setRemovingStudent(student);
+        }}
+      />
 
       {removingStudent && (
         <ConfirmActionModal

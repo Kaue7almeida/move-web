@@ -674,6 +674,29 @@ export class WorkoutRepository implements IWorkoutRepository {
     });
   }
 
+  async listStudentWorkoutsForTrainerAndStudent(
+    trainerUserId: string,
+    studentUserId: string,
+  ): Promise<StudentWorkoutRecord[]> {
+    const { data, error } = await this.supabase
+      .from("student_workouts")
+      .select("*")
+      .eq("trainer_user_id", trainerUserId)
+      .eq("student_user_id", studentUserId)
+      .in("status", ["active", "pending"])
+      .order("assigned_at", { ascending: false });
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "trainer_student_workouts_fetch_failed",
+        "Não foi possível carregar os treinos do aluno.",
+      );
+    }
+
+    return data ?? [];
+  }
+
   async listCompletedSessionsForTrainer(trainerUserId: string): Promise<WorkoutSessionRecord[]> {
     const { data, error } = await this.supabase
       .from("workout_sessions")

@@ -91,22 +91,49 @@ function WorkoutDetailsCard({
 }) {
   return (
     <div className="card-themed rounded-xl border border-border bg-surface p-4 sm:p-5">
-      <input
-        type="text"
-        value={title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        placeholder="Nome do treino — ex: Treino A · Superior"
-        aria-label="Nome do treino"
-        className="w-full bg-transparent text-lg font-semibold tracking-tight text-foreground outline-none placeholder:text-muted/70"
-      />
-      <input
-        type="text"
-        value={description}
-        onChange={(event) => onDescriptionChange(event.target.value)}
-        placeholder="Descrição (opcional) — ex: foco em peito, ombro e tríceps"
-        aria-label="Descrição do treino"
-        className="mt-1.5 w-full bg-transparent text-sm text-muted-foreground outline-none placeholder:text-muted/60"
-      />
+      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+        Identificação do treino
+      </p>
+
+      {/* Nome — campo principal */}
+      <div className="mt-4">
+        <label
+          htmlFor="workout-title"
+          className="mb-1.5 block text-sm font-semibold text-foreground"
+        >
+          Nome do treino
+        </label>
+        <input
+          id="workout-title"
+          type="text"
+          value={title}
+          onChange={(event) => onTitleChange(event.target.value)}
+          placeholder="Ex.: Treino A — Pernas e glúteos"
+          className="w-full rounded-lg border border-border bg-background px-3.5 py-3 text-base font-semibold tracking-tight text-foreground outline-none transition placeholder:font-normal placeholder:text-muted/70 focus:border-accent/40 focus:ring-1 focus:ring-accent/20"
+        />
+      </div>
+
+      {/* Separador para deixar claro onde termina o título e começa a descrição */}
+      <div className="my-4 border-t border-border" />
+
+      {/* Descrição — campo secundário */}
+      <div>
+        <label
+          htmlFor="workout-description"
+          className="mb-1.5 block text-sm font-medium text-muted-foreground"
+        >
+          Descrição ou orientação geral{" "}
+          <span className="font-normal text-muted">(opcional)</span>
+        </label>
+        <textarea
+          id="workout-description"
+          value={description}
+          onChange={(event) => onDescriptionChange(event.target.value)}
+          rows={3}
+          placeholder="Use este campo para explicar o foco do treino, observações ou cuidados."
+          className="w-full resize-y rounded-lg border border-border bg-background px-3.5 py-3 text-sm leading-relaxed text-foreground outline-none transition placeholder:text-muted/60 focus:border-accent/40 focus:ring-1 focus:ring-accent/20"
+        />
+      </div>
     </div>
   );
 }

@@ -371,6 +371,15 @@ export type TrainerStudentsActivityResponse = {
   students: TrainerStudentActivity[];
 };
 
+export type TrainerStudentWorkoutsResponse = {
+  student: {
+    userId: string;
+    fullName: string;
+    email: string;
+  };
+  workouts: StudentWorkoutSummary[];
+};
+
 /* ─── Workout session types ─── */
 
 export type WorkoutSessionStatus = "in_progress" | "completed";
