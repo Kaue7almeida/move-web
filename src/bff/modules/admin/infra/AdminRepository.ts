@@ -22,6 +22,12 @@ const TRAINERS_QUERY_FAILED = new ApiError(
   "Não foi possível carregar os personais.",
 );
 
+const STUDENTS_QUERY_FAILED = new ApiError(
+  500,
+  "admin_students_query_failed",
+  "Não foi possível carregar os alunos.",
+);
+
 export class AdminRepository implements IAdminRepository {
   constructor(private readonly supabase: SupabaseClient<Database>) {}
 
@@ -475,6 +481,315 @@ export class AdminRepository implements IAdminRepository {
 
     if (error) {
       throw TRAINERS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  /* ── Lista global de alunos (P1) ── */
+
+  async listStudentUserIds(): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from("student_profiles")
+      .select("user_id");
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return (data ?? []).map((row) => row.user_id);
+  }
+
+  async listStudentProfilePage(params: {
+    allowedIds: string[];
+    search: string | null;
+    sort: "newest" | "name";
+    from: number;
+    to: number;
+  }): Promise<{
+    rows: Array<{
+      id: string;
+      full_name: string | null;
+      email: string | null;
+      created_at: string;
+    }>;
+    total: number;
+  }> {
+    let query = this.supabase
+      .from("profiles")
+      .select("id, full_name, email, created_at", { count: "exact" })
+      .in("id", params.allowedIds);
+
+    if (params.search) {
+      // params.search já vem sanitizado (sem vírgulas/parênteses/curingas).
+      query = query.or(
+        `full_name.ilike.%${params.search}%,email.ilike.%${params.search}%`,
+      );
+    }
+
+    if (params.sort === "name") {
+      query = query
+        .order("full_name", { ascending: true, nullsFirst: false })
+        .order("id", { ascending: true });
+    } else {
+      query = query
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true });
+    }
+
+    const { data, count, error } = await query.range(params.from, params.to);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return { rows: data ?? [], total: count ?? 0 };
+  }
+
+  async listStudentOnboardingByIds(
+    studentUserIds: string[],
+  ): Promise<Array<{ user_id: string; onboarding_completed_at: string | null }>> {
+    if (studentUserIds.length === 0) {
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from("student_profiles")
+      .select("user_id, onboarding_completed_at")
+      .in("user_id", studentUserIds);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  async listActiveWorkoutStudentIdsForStudents(
+    studentUserIds: string[],
+  ): Promise<string[]> {
+    if (studentUserIds.length === 0) {
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from("student_workouts")
+      .select("student_user_id")
+      .in("student_user_id", studentUserIds)
+      .in("status", ["pending", "active"]);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return (data ?? []).map((row) => row.student_user_id);
+  }
+
+  async listCompletedSessionRefsForStudents(
+    studentUserIds: string[],
+  ): Promise<Array<{ student_user_id: string; completed_at: string | null }>> {
+    if (studentUserIds.length === 0) {
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from("workout_sessions")
+      .select("student_user_id, completed_at")
+      .eq("status", "completed")
+      .in("student_user_id", studentUserIds)
+      .order("completed_at", { ascending: false });
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  async listTrainerProfilesByIds(
+    trainerUserIds: string[],
+  ): Promise<Array<{ user_id: string; display_name: string | null }>> {
+    if (trainerUserIds.length === 0) {
+      return [];
+    }
+
+    const { data, error } = await this.supabase
+      .from("trainer_profiles")
+      .select("user_id, display_name")
+      .in("user_id", trainerUserIds);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  /* ── Detalhe do aluno (P1) ── */
+
+  async findProfileCoreById(userId: string): Promise<{
+    id: string;
+    full_name: string | null;
+    email: string | null;
+    created_at: string;
+  } | null> {
+    const { data, error } = await this.supabase
+      .from("profiles")
+      .select("id, full_name, email, created_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async findStudentProfileCoreById(userId: string): Promise<{
+    user_id: string;
+    onboarding_completed_at: string | null;
+  } | null> {
+    const { data, error } = await this.supabase
+      .from("student_profiles")
+      .select("user_id, onboarding_completed_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async listActiveRelationshipsForStudent(
+    studentUserId: string,
+  ): Promise<Array<{ status: string; trainer_user_id: string; started_at: string | null }>> {
+    const { data, error } = await this.supabase
+      .from("student_trainer_relationships")
+      .select("status, trainer_user_id, started_at")
+      .eq("student_user_id", studentUserId)
+      .eq("status", "active")
+      .order("started_at", { ascending: false, nullsFirst: false });
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  async listActiveWorkoutsForStudent(
+    studentUserId: string,
+  ): Promise<Array<{ id: string; title: string; status: string; assigned_at: string }>> {
+    const { data, error } = await this.supabase
+      .from("student_workouts")
+      .select("id, title, status, assigned_at")
+      .eq("student_user_id", studentUserId)
+      .in("status", ["pending", "active"])
+      .order("assigned_at", { ascending: false });
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  async countCompletedSessionsForStudent(studentUserId: string): Promise<number> {
+    const { count, error } = await this.supabase
+      .from("workout_sessions")
+      .select("*", { count: "exact", head: true })
+      .eq("student_user_id", studentUserId)
+      .eq("status", "completed");
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return count ?? 0;
+  }
+
+  async findLastCompletedSessionAtForStudent(
+    studentUserId: string,
+  ): Promise<string | null> {
+    const { data, error } = await this.supabase
+      .from("workout_sessions")
+      .select("completed_at")
+      .eq("student_user_id", studentUserId)
+      .eq("status", "completed")
+      .order("completed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data?.completed_at ?? null;
+  }
+
+  async countCompletedScansForStudent(studentUserId: string): Promise<number> {
+    const { count, error } = await this.supabase
+      .from("scan_analyses")
+      .select("*", { count: "exact", head: true })
+      .eq("student_user_id", studentUserId)
+      .eq("status", "completed");
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return count ?? 0;
+  }
+
+  async findLastCompletedScanAtForStudent(
+    studentUserId: string,
+  ): Promise<string | null> {
+    const { data, error } = await this.supabase
+      .from("scan_analyses")
+      .select("created_at")
+      .eq("student_user_id", studentUserId)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return data?.created_at ?? null;
+  }
+
+  async countConversationsForStudent(studentUserId: string): Promise<number> {
+    const { count, error } = await this.supabase
+      .from("chat_conversations")
+      .select("*", { count: "exact", head: true })
+      .eq("student_user_id", studentUserId)
+      .is("deleted_at", null);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
+    }
+
+    return count ?? 0;
+  }
+
+  async listRecentRelationshipEventsForStudent(
+    studentUserId: string,
+    limit: number,
+  ): Promise<Array<{ event_type: string; occurred_at: string }>> {
+    const { data, error } = await this.supabase
+      .from("student_trainer_relationship_events")
+      .select("event_type, occurred_at")
+      .eq("student_user_id", studentUserId)
+      .order("occurred_at", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      throw STUDENTS_QUERY_FAILED;
     }
 
     return data ?? [];

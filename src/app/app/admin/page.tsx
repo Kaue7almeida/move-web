@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   Activity,
@@ -1063,6 +1064,46 @@ export default function AdminPage() {
               icon={Clock}
             />
           </div>
+
+          <SectionCard>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-muted">
+                  <Users size={18} className="text-accent" strokeWidth={1.8} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">Alunos</h2>
+                  <p className="text-xs text-muted">Lista completa, busca e detalhe.</p>
+                </div>
+              </div>
+              <Link
+                href="/app/admin/alunos"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-on transition-colors hover:bg-accent-hover"
+              >
+                Ver todos os alunos
+                <ChevronRight size={14} />
+              </Link>
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="rounded-lg border border-border bg-background px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold text-foreground">{overview.studentCount}</p>
+                <p className="mt-0.5 text-[11px] leading-tight text-muted">Total</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold text-success">
+                  {overview.activeStudentCount}
+                </p>
+                <p className="mt-0.5 text-[11px] leading-tight text-muted">Com personal</p>
+              </div>
+              <div className="rounded-lg border border-border bg-background px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold text-amber-600">
+                  {Math.max(0, overview.studentCount - overview.activeStudentCount)}
+                </p>
+                <p className="mt-0.5 text-[11px] leading-tight text-muted">Sem personal</p>
+              </div>
+            </div>
+          </SectionCard>
 
           <SectionCard>
             <div className="flex items-center gap-3">

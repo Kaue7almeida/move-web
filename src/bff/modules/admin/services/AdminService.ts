@@ -1,24 +1,31 @@
 import { ApiError } from "@/bff/core/errors/ApiError";
 import type { RelationshipEventType } from "@/bff/modules/profile/types";
-import type {
-  AdminAttentionResponse,
-  AdminAttentionStalledStudentItem,
-  AdminAttentionStudentItem,
-  AdminAttentionTrainerItem,
-  AdminOverview,
-  AdminRecentScanItem,
-  AdminScanOverviewResponse,
-  AdminScanStatus,
-  AdminScanStudentItem,
-  AdminScanSummary,
-  AdminTrainerDetailResponse,
-  AdminTrainerListResponse,
+import {
+  ADMIN_STUDENTS_MAX_LIMIT,
+  type AdminAttentionResponse,
+  type AdminAttentionStalledStudentItem,
+  type AdminAttentionStudentItem,
+  type AdminAttentionTrainerItem,
+  type AdminOverview,
+  type AdminRecentScanItem,
+  type AdminScanOverviewResponse,
+  type AdminScanStatus,
+  type AdminScanStudentItem,
+  type AdminScanSummary,
+  type AdminStudentDetailRelationship,
+  type AdminStudentDetailResponse,
+  type AdminStudentListItem,
+  type AdminStudentListQuery,
+  type AdminStudentListResponse,
+  type AdminTrainerDetailResponse,
+  type AdminTrainerListResponse,
 } from "@/bff/modules/admin/types";
 import type { IAdminRepository } from "@/bff/modules/admin/types/IAdminRepository";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const RECENT_EVENTS_LIMIT = 50;
+const STUDENT_RECENT_EVENTS_LIMIT = 10;
 const ATTENTION_LIST_LIMIT = 10;
 /** Cap de candidatos da lista "sem sessao recente" antes de buscar a ultima sessao. */
 const STALLED_CANDIDATE_CAP = 50;
@@ -48,6 +55,31 @@ const STUDENT_STATUS_PRIORITY: Record<string, number> = {
   pending: 1,
   ended: 2,
 };
+
+/**
+ * Remove caracteres que quebram a sintaxe de `.or()`/`ilike` do PostgREST
+ * (vírgula, parênteses, curingas). Retorna null quando não sobra nada útil.
+ */
+function sanitizeStudentSearch(raw: string | null): string | null {
+  if (!raw) {
+    return null;
+  }
+
+  const cleaned = raw
+    .replace(/[,()*%_:\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function clampStudentLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) {
+    return 1;
+  }
+
+  return Math.min(Math.floor(limit), ADMIN_STUDENTS_MAX_LIMIT);
+}
 
 /** Canonical event types, used to seed a stable eventsByType shape (zero-filled). */
 const RELATIONSHIP_EVENT_TYPES = [
@@ -573,6 +605,279 @@ export class AdminService {
           actorRole: event.actor_role,
           source: event.source,
           studentUserId: event.student_user_id,
+        })),
+      },
+    };
+  }
+
+  /**
+   * Lista global de alunos com busca/filtro/ordenação e paginação server-side.
+   *
+   * O universo de alunos e os vínculos ativos (roster, proporcional ao nº de
+   * usuários) são lidos por completo — mesmo padrão de `getAttention`. A página
+   * (nome/e-mail/created_at) é buscada, ordenada e paginada no banco. Os
+   * agregados de atividade (treinos/sessões) são buscados em lote apenas para os
+   * IDs da página — nunca por aluno em loop, nunca tabelas de atividade inteiras.
+   */
+  async listStudents(query: AdminStudentListQuery): Promise<AdminStudentListResponse> {
+    const limit = clampStudentLimit(query.limit);
+    const page = Number.isFinite(query.page) ? Math.max(1, Math.floor(query.page)) : 1;
+    const search = sanitizeStudentSearch(query.search);
+
+    const [studentIds, activeRelationships] = await Promise.all([
+      this.adminRepository.listStudentUserIds(),
+      this.adminRepository.listActiveRelationships(),
+    ]);
+
+    const studentIdSet = new Set(studentIds);
+    const totalStudents = studentIdSet.size;
+
+    // Vínculo ativo "atual" por aluno: mais recente por started_at; conta múltiplos.
+    const activeByStudent = new Map<
+      string,
+      { trainerUserId: string; startedAt: string | null; count: number }
+    >();
+
+    for (const relationship of activeRelationships) {
+      if (!studentIdSet.has(relationship.student_user_id)) {
+        continue;
+      }
+
+      const current = activeByStudent.get(relationship.student_user_id);
+
+      if (!current) {
+        activeByStudent.set(relationship.student_user_id, {
+          trainerUserId: relationship.trainer_user_id,
+          startedAt: relationship.started_at,
+          count: 1,
+        });
+      } else {
+        current.count += 1;
+
+        if (compareIsoAscNullsLast(current.startedAt, relationship.started_at) < 0) {
+          current.trainerUserId = relationship.trainer_user_id;
+          current.startedAt = relationship.started_at;
+        }
+      }
+    }
+
+    const withTrainer = activeByStudent.size;
+    const summary = {
+      totalStudents,
+      withTrainer,
+      withoutTrainer: totalStudents - withTrainer,
+    };
+
+    let allowedIds: string[];
+
+    if (query.filter === "with_trainer") {
+      allowedIds = studentIds.filter((id) => activeByStudent.has(id));
+    } else if (query.filter === "without_trainer") {
+      allowedIds = studentIds.filter((id) => !activeByStudent.has(id));
+    } else {
+      allowedIds = studentIds;
+    }
+
+    if (allowedIds.length === 0) {
+      return {
+        items: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+        summary,
+      };
+    }
+
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    const { rows, total } = await this.adminRepository.listStudentProfilePage({
+      allowedIds,
+      search,
+      sort: query.sort,
+      from,
+      to,
+    });
+
+    const pageIds = rows.map((row) => row.id);
+
+    if (pageIds.length === 0) {
+      return {
+        items: [],
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        summary,
+      };
+    }
+
+    const trainerIds = Array.from(
+      new Set(
+        pageIds
+          .map((id) => activeByStudent.get(id)?.trainerUserId)
+          .filter((value): value is string => typeof value === "string"),
+      ),
+    );
+
+    const [onboardingRows, activeWorkoutStudentIds, completedSessionRefs, trainerProfiles, trainerFallbackProfiles] =
+      await Promise.all([
+        this.adminRepository.listStudentOnboardingByIds(pageIds),
+        this.adminRepository.listActiveWorkoutStudentIdsForStudents(pageIds),
+        this.adminRepository.listCompletedSessionRefsForStudents(pageIds),
+        this.adminRepository.listTrainerProfilesByIds(trainerIds),
+        this.adminRepository.listProfilesByIds(trainerIds),
+      ]);
+
+    const onboardingByStudent = new Map(
+      onboardingRows.map((row) => [row.user_id, row.onboarding_completed_at]),
+    );
+
+    const activeWorkoutCountByStudent = new Map<string, number>();
+    for (const studentUserId of activeWorkoutStudentIds) {
+      activeWorkoutCountByStudent.set(
+        studentUserId,
+        (activeWorkoutCountByStudent.get(studentUserId) ?? 0) + 1,
+      );
+    }
+
+    // completedSessionRefs vem ordenado desc: primeiro encontro por aluno = última sessão.
+    const sessionCountByStudent = new Map<string, number>();
+    const lastSessionByStudent = new Map<string, string | null>();
+    for (const ref of completedSessionRefs) {
+      sessionCountByStudent.set(
+        ref.student_user_id,
+        (sessionCountByStudent.get(ref.student_user_id) ?? 0) + 1,
+      );
+
+      if (!lastSessionByStudent.has(ref.student_user_id)) {
+        lastSessionByStudent.set(ref.student_user_id, ref.completed_at);
+      }
+    }
+
+    const trainerDisplayById = new Map(
+      trainerProfiles.map((trainer) => [trainer.user_id, trainer.display_name?.trim() || null]),
+    );
+    const trainerFallbackById = new Map(
+      trainerFallbackProfiles.map((profile) => [profile.id, profile.full_name?.trim() || null]),
+    );
+
+    const items: AdminStudentListItem[] = rows.map((row) => {
+      const active = activeByStudent.get(row.id);
+      const trainer = active
+        ? {
+            trainerUserId: active.trainerUserId,
+            name:
+              trainerDisplayById.get(active.trainerUserId) ??
+              trainerFallbackById.get(active.trainerUserId) ??
+              "Personal",
+            relationshipStartedAt: active.startedAt,
+          }
+        : null;
+
+      return {
+        studentUserId: row.id,
+        name: row.full_name?.trim() || null,
+        email: row.email?.trim() || "",
+        createdAt: row.created_at,
+        onboardingCompletedAt: onboardingByStudent.get(row.id) ?? null,
+        trainer,
+        hasMultipleActiveTrainers: (active?.count ?? 0) > 1,
+        activeWorkoutCount: activeWorkoutCountByStudent.get(row.id) ?? 0,
+        completedSessionCount: sessionCountByStudent.get(row.id) ?? 0,
+        lastCompletedSessionAt: lastSessionByStudent.get(row.id) ?? null,
+      };
+    });
+
+    return {
+      items,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      summary,
+    };
+  }
+
+  /**
+   * Detalhe read-only de um aluno. Todas as consultas são por um único aluno e
+   * usam count/head ou limit(1) — sem loops, sem tabelas inteiras. Nunca devolve
+   * conteúdo de chat, fotos/URLs de scan, percentual corporal, config de IA nem
+   * dados brutos de auth.users.
+   */
+  async getStudentDetail(studentUserId: string): Promise<AdminStudentDetailResponse> {
+    const [profile, studentProfile] = await Promise.all([
+      this.adminRepository.findProfileCoreById(studentUserId),
+      this.adminRepository.findStudentProfileCoreById(studentUserId),
+    ]);
+
+    if (!studentProfile) {
+      throw new ApiError(404, "admin_student_not_found", "Aluno não encontrado.");
+    }
+
+    const [
+      activeRelationships,
+      workouts,
+      completedSessions,
+      lastCompletedSessionAt,
+      completedScans,
+      lastScanAt,
+      conversationCount,
+      events,
+    ] = await Promise.all([
+      this.adminRepository.listActiveRelationshipsForStudent(studentUserId),
+      this.adminRepository.listActiveWorkoutsForStudent(studentUserId),
+      this.adminRepository.countCompletedSessionsForStudent(studentUserId),
+      this.adminRepository.findLastCompletedSessionAtForStudent(studentUserId),
+      this.adminRepository.countCompletedScansForStudent(studentUserId),
+      this.adminRepository.findLastCompletedScanAtForStudent(studentUserId),
+      this.adminRepository.countConversationsForStudent(studentUserId),
+      this.adminRepository.listRecentRelationshipEventsForStudent(
+        studentUserId,
+        STUDENT_RECENT_EVENTS_LIMIT,
+      ),
+    ]);
+
+    // Vínculo ativo "atual" = mais recente por started_at (rows já vêm desc).
+    const current = activeRelationships[0] ?? null;
+    let relationship: AdminStudentDetailRelationship | null = null;
+
+    if (current) {
+      const [trainerProfiles, trainerFallbackProfiles] = await Promise.all([
+        this.adminRepository.listTrainerProfilesByIds([current.trainer_user_id]),
+        this.adminRepository.listProfilesByIds([current.trainer_user_id]),
+      ]);
+
+      const trainerName =
+        trainerProfiles[0]?.display_name?.trim() ||
+        trainerFallbackProfiles[0]?.full_name?.trim() ||
+        "Personal";
+
+      relationship = {
+        status: current.status,
+        trainerUserId: current.trainer_user_id,
+        trainerName,
+        startedAt: current.started_at,
+      };
+    }
+
+    return {
+      student: {
+        studentUserId,
+        name: profile?.full_name?.trim() || null,
+        email: profile?.email?.trim() || "",
+        createdAt: profile?.created_at ?? "",
+        onboardingCompletedAt: studentProfile.onboarding_completed_at,
+        relationship,
+        hasMultipleActiveTrainers: activeRelationships.length > 1,
+        workouts: workouts.map((workout) => ({
+          id: workout.id,
+          title: workout.title,
+          status: workout.status,
+          assignedAt: workout.assigned_at,
+        })),
+        activity: {
+          completedSessions,
+          lastCompletedSessionAt,
+          completedScans,
+          lastScanAt,
+          conversationCount,
+        },
+        recentRelationshipEvents: events.map((event) => ({
+          eventType: event.event_type,
+          occurredAt: event.occurred_at,
         })),
       },
     };

@@ -83,4 +83,80 @@ export interface IAdminRepository {
       quality_overall: string | null;
     }>
   >;
+
+  /* ── Lista global de alunos (P1) ── */
+
+  /** Todos os user_ids que são alunos (roster, proporcional ao nº de usuários). */
+  listStudentUserIds(): Promise<string[]>;
+
+  /**
+   * Página de perfis (já restrita ao conjunto de alunos permitido) com busca por
+   * nome/e-mail, ordenação e paginação feitas no banco. Retorna a página e o
+   * total filtrado (count exato) numa única consulta.
+   */
+  listStudentProfilePage(params: {
+    allowedIds: string[];
+    search: string | null;
+    sort: "newest" | "name";
+    from: number;
+    to: number;
+  }): Promise<{
+    rows: Array<{
+      id: string;
+      full_name: string | null;
+      email: string | null;
+      created_at: string;
+    }>;
+    total: number;
+  }>;
+
+  /** Onboarding dos alunos da página (batch por ids). */
+  listStudentOnboardingByIds(
+    studentUserIds: string[],
+  ): Promise<Array<{ user_id: string; onboarding_completed_at: string | null }>>;
+
+  /** Refs de treinos ativos (pending/active) apenas dos alunos informados. */
+  listActiveWorkoutStudentIdsForStudents(studentUserIds: string[]): Promise<string[]>;
+
+  /** Sessões concluídas (desc) apenas dos alunos informados; para count + última. */
+  listCompletedSessionRefsForStudents(
+    studentUserIds: string[],
+  ): Promise<Array<{ student_user_id: string; completed_at: string | null }>>;
+
+  /** display_name dos personais informados (batch por ids). */
+  listTrainerProfilesByIds(
+    trainerUserIds: string[],
+  ): Promise<Array<{ user_id: string; display_name: string | null }>>;
+
+  /* ── Detalhe do aluno (P1) ── */
+
+  findProfileCoreById(userId: string): Promise<{
+    id: string;
+    full_name: string | null;
+    email: string | null;
+    created_at: string;
+  } | null>;
+
+  findStudentProfileCoreById(userId: string): Promise<{
+    user_id: string;
+    onboarding_completed_at: string | null;
+  } | null>;
+
+  listActiveRelationshipsForStudent(studentUserId: string): Promise<
+    Array<{ status: string; trainer_user_id: string; started_at: string | null }>
+  >;
+
+  listActiveWorkoutsForStudent(studentUserId: string): Promise<
+    Array<{ id: string; title: string; status: string; assigned_at: string }>
+  >;
+
+  countCompletedSessionsForStudent(studentUserId: string): Promise<number>;
+  findLastCompletedSessionAtForStudent(studentUserId: string): Promise<string | null>;
+  countCompletedScansForStudent(studentUserId: string): Promise<number>;
+  findLastCompletedScanAtForStudent(studentUserId: string): Promise<string | null>;
+  countConversationsForStudent(studentUserId: string): Promise<number>;
+  listRecentRelationshipEventsForStudent(
+    studentUserId: string,
+    limit: number,
+  ): Promise<Array<{ event_type: string; occurred_at: string }>>;
 }
