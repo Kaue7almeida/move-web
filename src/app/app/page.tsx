@@ -20,6 +20,7 @@ import {
   getRelationshipSummary,
   type ChecklistSummary,
 } from "./app-utils";
+import { DiaryHomeCard } from "./diario/_components/DiaryHomeCard";
 
 /* ─── Greeting ─── */
 function Greeting({
@@ -433,6 +434,9 @@ function StudentDailyHome({
           />
         </div>
       </div>
+
+      {/* Diário Alimentar — bloco de alta relevância (hero secundário do dia) */}
+      <DiaryHomeCard />
 
       {/* Scan corporal — módulo em destaque */}
       <Link

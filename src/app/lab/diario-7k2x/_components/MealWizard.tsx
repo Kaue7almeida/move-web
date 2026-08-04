@@ -227,6 +227,7 @@ export function MealWizard({
         nome: food.nome,
         categoria: food.categoria,
         gramas: 100,
+        gramasEstimadas: 100,
         confianca: 1,
         fonte: "manual",
       },

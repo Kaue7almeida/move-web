@@ -18,6 +18,7 @@ import {
   BarChart3,
   Shield,
   ScanLine,
+  Utensils,
 } from "lucide-react";
 
 import type { MeResponse } from "@/bff/modules/profile/types";
@@ -44,6 +45,7 @@ type NavIconName =
   | "chart"
   | "shield"
   | "scan"
+  | "diario"
   | "chat";
 
 const NAV_ICONS: Record<string, NavIconName> = {
@@ -56,6 +58,7 @@ const NAV_ICONS: Record<string, NavIconName> = {
   "/app/historico": "chart",
   "/app/admin": "shield",
   "/app/scan": "scan",
+  "/app/diario": "diario",
   "/app/chat": "chat",
 };
 
@@ -83,6 +86,8 @@ function NavIcon({ name, size = 20 }: { name: NavIconName; size?: number }) {
       return <Shield {...props} />;
     case "scan":
       return <ScanLine {...props} />;
+    case "diario":
+      return <Utensils {...props} />;
     case "chat":
       return <MessageCircle {...props} />;
   }

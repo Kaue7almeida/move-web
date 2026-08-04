@@ -245,6 +245,7 @@ export function buildNavigation(
   return [
     { href: "/app", label: "Início" },
     { href: "/app/treinos", label: "Treinos" },
+    { href: "/app/diario", label: "Diário" },
     { href: "/app/chat", label: "Chat Move" },
     { href: "/app/galeria", label: "Galeria" },
     { href: "/app/historico", label: "Histórico" },
