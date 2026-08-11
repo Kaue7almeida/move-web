@@ -27,6 +27,9 @@ type ResponsesApiBody = {
   model: string;
   instructions: string;
   input: InputMessage[];
+  // One-shot analysis: do not let OpenAI persist Responses API application state for
+  // this call. The meal photo is user data and there is no conversational state.
+  store: false;
   text: {
     format: { type: "json_schema"; name: string; schema: Record<string, unknown>; strict: boolean };
   };
@@ -202,6 +205,7 @@ export class OpenAiFoodDiaryClient {
       model: this.model,
       instructions: buildSystemPrompt(),
       input: [{ role: "user", content: buildUserContent(input) }],
+      store: false,
       text: {
         format: {
           type: "json_schema",

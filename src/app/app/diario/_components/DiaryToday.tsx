@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Activity,
   Camera,
@@ -8,62 +8,73 @@ import {
   ChevronDown,
   Flame,
   Info,
+  Loader2,
   Pencil,
   Plus,
-  RotateCcw,
-  Sparkles,
   Target,
   Trash2,
   Zap,
 } from "lucide-react";
 
-import type { DiaryDay, DiaryMeal, MacroKey, MealType } from "../_mock/diaryMock";
+import type {
+  ActivityEnergyView,
+  FoodDiaryEntryView,
+  FoodDiaryTodayResponse,
+  MealType,
+} from "@/bff/modules/foodDiary/types";
+import { addActivity, deleteEntry, removeActivity, upsertTarget } from "@/services/foodDiary/foodDiaryService";
+
+import { DIARY_DISCLAIMER, MEAL_LABELS, QUICK_ACTIVITIES, SUGGESTED_TARGET_KCAL } from "../_content";
+import { describeFoodDiaryError } from "../_errors";
 import {
-  MEAL_LABELS,
-  QUICK_ACTIVITIES,
-  SUGGESTED_TARGET_KCAL,
-  anchorsLogged,
-  buildDayInsights,
-  dayBurned,
-  dayConsumed,
   macroContributions,
   macroTargetsForKcal,
-  mealTotals,
-} from "../_mock/diaryMock";
-import { DIARY_DISCLAIMER } from "../_content";
+  mealKcal,
+  type MacroKey,
+} from "../_nutrition";
 import { BalanceRing, useCountUp } from "./BalanceRing";
 import { DayTrail, MealIcon } from "./bits";
 
 type DiaryTodayProps = {
-  day: DiaryDay;
+  today: FoodDiaryTodayResponse;
   onStartMeal: (meal: MealType) => void;
-  onRemoveMeal: (mealId: string) => void;
-  onSetTarget: (kcal: number) => void;
-  onAddActivity: (label: string, kcal: number) => void;
-  onRemoveActivity: (activityId: string) => void;
-  onSetBurnMode: (mode: "atividades" | "estimativa") => void;
-  onSetEstimatedBurn: (kcal: number) => void;
+  /** Re-busca o dia após uma mutação (a página é a fonte de verdade). */
+  onRefresh: () => void;
 };
 
-export function DiaryToday(props: DiaryTodayProps) {
-  const { day, onStartMeal } = props;
-  const consumed = useMemo(() => dayConsumed(day), [day]);
-  const burned = dayBurned(day);
+export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
+  const { totals, meals, activities } = today;
 
-  if (day.targetKcal === null) {
-    return <TargetSetup onSetTarget={props.onSetTarget} />;
+  // Ações reais: cada mutação chama o BFF e, ao concluir, dispara onRefresh().
+  const setTarget = async (kcal: number) => {
+    await upsertTarget({ targetKcal: kcal });
+    onRefresh();
+  };
+
+  if (today.target === null) {
+    return <TargetSetup onSetTarget={setTarget} />;
   }
 
-  const targetKcal = day.targetKcal;
+  const targetKcal = today.target.targetKcal;
   const macroTargets = macroTargetsForKcal(targetKcal);
-  const loggedMeals = new Set<MealType>(day.meals.map((meal) => meal.mealType));
+  const consumedMacros = {
+    proteinG: totals.consumedProteinG,
+    carbG: totals.consumedCarbG,
+    fatG: totals.consumedFatG,
+  };
+
+  const loggedMeals = new Set<MealType>(meals.map((meal) => meal.mealType as MealType));
   const kcalByMeal: Partial<Record<MealType, number>> = {};
 
-  for (const meal of day.meals) {
-    kcalByMeal[meal.mealType] = (kcalByMeal[meal.mealType] ?? 0) + mealTotals(meal).kcal;
+  for (const meal of meals) {
+    const type = meal.mealType as MealType;
+    kcalByMeal[type] = (kcalByMeal[type] ?? 0) + mealKcal(meal);
   }
 
-  const extrasCount = day.meals.filter((meal) => meal.mealType === "extra").length;
+  const anchorsLogged = new Set(
+    meals.filter((meal) => meal.mealType !== "extra").map((meal) => meal.mealType),
+  ).size;
+  const extrasCount = meals.filter((meal) => meal.mealType === "extra").length;
 
   return (
     <div className="space-y-6">
@@ -71,20 +82,25 @@ export function DiaryToday(props: DiaryTodayProps) {
       <section className="dia-rise overflow-hidden rounded-2xl border border-border bg-surface p-5 sm:p-6">
         <div className="grid items-center gap-6 sm:grid-cols-[auto_1fr] sm:gap-8">
           <BalanceRing
-            consumedKcal={consumed.kcal}
+            consumedKcal={totals.consumedKcal}
             targetKcal={targetKcal}
-            burnedKcal={burned}
-            burnReferenceKcal={Math.max(day.estimatedDailyBurn, 1)}
+            burnedKcal={totals.burnedKcal}
+            burnReferenceKcal={Math.max(totals.burnedKcal, 1)}
           />
 
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-2 sm:gap-3">
-              <StatCard label="Consumido" value={consumed.kcal} icon={Flame} tone="accent" />
-              <StatCard label="Gasto" value={burned} icon={Zap} tone="success" />
+              <StatCard label="Consumido" value={totals.consumedKcal} icon={Flame} tone="accent" />
+              <StatCard label="Gasto" value={totals.burnedKcal} icon={Zap} tone="success" />
               <StatCard label="Meta" value={targetKcal} icon={Target} tone="neutral" />
             </div>
 
-            <MacroPanel day={day} consumedMacros={consumed} macroTargets={macroTargets} targetKcal={targetKcal} />
+            <MacroPanel
+              meals={meals}
+              consumedMacros={consumedMacros}
+              macroTargets={macroTargets}
+              targetKcal={targetKcal}
+            />
           </div>
         </div>
       </section>
@@ -94,7 +110,7 @@ export function DiaryToday(props: DiaryTodayProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold text-foreground">Trilha do dia</h2>
           <p className="text-[11px] text-muted">
-            {anchorsLogged(day)} de 4 refeições
+            {anchorsLogged} de 4 refeições
             {extrasCount > 0 && (
               <span className="ml-1.5 rounded-full bg-accent-soft px-2 py-0.5 font-semibold text-accent">
                 +{extrasCount} extra{extrasCount > 1 ? "s" : ""}
@@ -108,7 +124,7 @@ export function DiaryToday(props: DiaryTodayProps) {
       {/* CTA principal */}
       <button
         type="button"
-        onClick={() => onStartMeal(suggestMeal())}
+        onClick={() => onStartMeal(suggestMealByHour())}
         className="dia-rise flex w-full items-center justify-center gap-2.5 rounded-2xl bg-accent px-6 py-4 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-all hover:bg-accent-hover"
       >
         <Camera size={18} strokeWidth={2} />
@@ -116,33 +132,68 @@ export function DiaryToday(props: DiaryTodayProps) {
       </button>
 
       {/* Refeições do dia */}
-      <MealsSection meals={day.meals} onRemoveMeal={props.onRemoveMeal} />
+      <MealsSection
+        meals={meals}
+        onRemoveMeal={async (id) => {
+          await deleteEntry(id);
+          onRefresh();
+        }}
+      />
 
-      {/* Análise do dia */}
-      {day.meals.length > 0 && <DayAnalysis day={day} />}
-
-      {/* Gasto calórico */}
+      {/* Gasto calórico (atividades reais) */}
       <BurnSection
-        day={day}
-        onAddActivity={props.onAddActivity}
-        onRemoveActivity={props.onRemoveActivity}
-        onSetBurnMode={props.onSetBurnMode}
-        onSetEstimatedBurn={props.onSetEstimatedBurn}
+        activities={activities}
+        onAddActivity={async (label, kcal) => {
+          await addActivity({ label, kcalBurned: kcal });
+          onRefresh();
+        }}
+        onRemoveActivity={async (id) => {
+          await removeActivity(id);
+          onRefresh();
+        }}
       />
 
       {/* Meta diária */}
-      <TargetSection targetKcal={targetKcal} onSetTarget={props.onSetTarget} />
+      <TargetSection targetKcal={targetKcal} onSetTarget={setTarget} />
 
       <p className="text-[11px] leading-relaxed text-muted">{DIARY_DISCLAIMER}</p>
     </div>
   );
 }
 
+/* ─── Erro inline reutilizável ───────────────────────────────────────────────── */
+
+function InlineError({ message }: { message: string }) {
+  return (
+    <p className="mt-2 text-[11px] font-medium text-accent" role="alert">
+      {message}
+    </p>
+  );
+}
+
 /* ─── Primeiro uso: definir meta ─────────────────────────────────────────────── */
 
-function TargetSetup({ onSetTarget }: { onSetTarget: (kcal: number) => void }) {
+function TargetSetup({ onSetTarget }: { onSetTarget: (kcal: number) => Promise<void> }) {
   const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const parsed = Number(draft);
+
+  async function commit(kcal: number) {
+    if (!(kcal > 0) || pending) {
+      return;
+    }
+
+    setPending(true);
+    setError(null);
+
+    try {
+      await onSetTarget(Math.round(kcal));
+    } catch (caught) {
+      setError(describeFoodDiaryError(caught).message);
+      setPending(false);
+    }
+  }
 
   return (
     <section className="dia-rise overflow-hidden rounded-2xl border border-border bg-surface p-6 text-center sm:p-8">
@@ -157,10 +208,11 @@ function TargetSetup({ onSetTarget }: { onSetTarget: (kcal: number) => void }) {
 
       <button
         type="button"
-        onClick={() => onSetTarget(SUGGESTED_TARGET_KCAL)}
-        className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-colors hover:bg-accent-hover"
+        onClick={() => void commit(SUGGESTED_TARGET_KCAL)}
+        disabled={pending}
+        className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <Zap size={16} strokeWidth={2} />
+        {pending ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} strokeWidth={2} />}
         Usar {SUGGESTED_TARGET_KCAL.toLocaleString("pt-BR")} kcal sugeridas
       </button>
 
@@ -170,23 +222,26 @@ function TargetSetup({ onSetTarget }: { onSetTarget: (kcal: number) => void }) {
           min={1}
           placeholder="Outra meta..."
           value={draft}
+          disabled={pending}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && parsed > 0) onSetTarget(Math.round(parsed));
+            if (event.key === "Enter") void commit(parsed);
           }}
           className="h-10 flex-1 rounded-lg border border-border bg-background px-3 text-center text-sm font-semibold text-foreground placeholder:font-normal placeholder:text-muted"
           aria-label="Meta personalizada em kcal"
         />
         <button
           type="button"
-          onClick={() => parsed > 0 && onSetTarget(Math.round(parsed))}
-          disabled={!(parsed > 0)}
+          onClick={() => void commit(parsed)}
+          disabled={pending || !(parsed > 0)}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-strong text-foreground transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
           title="Definir meta"
         >
           <Check size={16} />
         </button>
       </div>
+
+      {error && <InlineError message={error} />}
 
       <p className="mt-4 text-[11px] text-muted">
         No futuro, a sugestão poderá vir da sua TMB calculada no MoveScan.
@@ -233,23 +288,23 @@ function StatCard({
 /* ─── Painel de macros com drill-down ────────────────────────────────────────── */
 
 function MacroPanel({
-  day,
+  meals,
   consumedMacros,
   macroTargets,
   targetKcal,
 }: {
-  day: DiaryDay;
-  consumedMacros: { proteinaG: number; carboG: number; gorduraG: number };
-  macroTargets: { proteinaG: number; carboG: number; gorduraG: number };
+  meals: FoodDiaryEntryView[];
+  consumedMacros: { proteinG: number; carbG: number; fatG: number };
+  macroTargets: { proteinG: number; carbG: number; fatG: number };
   targetKcal: number;
 }) {
   const [expanded, setExpanded] = useState<MacroKey | null>(null);
   const [showInfo, setShowInfo] = useState(false);
 
   const rows: Array<{ key: MacroKey; label: string; value: number; target: number; barClass: string }> = [
-    { key: "proteinaG", label: "Proteínas", value: consumedMacros.proteinaG, target: macroTargets.proteinaG, barClass: "bg-success" },
-    { key: "carboG", label: "Carboidratos", value: consumedMacros.carboG, target: macroTargets.carboG, barClass: "bg-accent" },
-    { key: "gorduraG", label: "Gorduras", value: consumedMacros.gorduraG, target: macroTargets.gorduraG, barClass: "bg-muted/60" },
+    { key: "proteinG", label: "Proteínas", value: consumedMacros.proteinG, target: macroTargets.proteinG, barClass: "bg-success" },
+    { key: "carbG", label: "Carboidratos", value: consumedMacros.carbG, target: macroTargets.carbG, barClass: "bg-accent" },
+    { key: "fatG", label: "Gorduras", value: consumedMacros.fatG, target: macroTargets.fatG, barClass: "bg-muted/60" },
   ];
 
   return (
@@ -283,7 +338,7 @@ function MacroPanel({
           valueG={row.value}
           targetG={row.target}
           barClass={row.barClass}
-          contributions={macroContributions(day, row.key)}
+          contributions={macroContributions(meals, row.key)}
           isOpen={expanded === row.key}
           onToggle={() => setExpanded((current) => (current === row.key ? null : row.key))}
         />
@@ -305,7 +360,7 @@ function MacroRow({
   valueG: number;
   targetG: number;
   barClass: string;
-  contributions: Array<{ nome: string; grams: number }>;
+  contributions: Array<{ name: string; grams: number }>;
   isOpen: boolean;
   onToggle: () => void;
 }) {
@@ -339,8 +394,8 @@ function MacroRow({
             const share = valueG > 0 ? Math.min((contribution.grams / valueG) * 100, 100) : 0;
 
             return (
-              <li key={contribution.nome} className="flex items-center gap-2">
-                <span className="w-1/2 truncate text-[11px] text-muted-foreground">{contribution.nome}</span>
+              <li key={contribution.name} className="flex items-center gap-2">
+                <span className="w-1/2 truncate text-[11px] text-muted-foreground">{contribution.name}</span>
                 <span className="h-1 flex-1 overflow-hidden rounded-full bg-surface">
                   <span className={`block h-full rounded-full ${barClass}`} style={{ width: `${share}%` }} />
                 </span>
@@ -358,7 +413,33 @@ function MacroRow({
 
 /* ─── Refeições do dia ───────────────────────────────────────────────────────── */
 
-function MealsSection({ meals, onRemoveMeal }: { meals: DiaryMeal[]; onRemoveMeal: (mealId: string) => void }) {
+function MealsSection({
+  meals,
+  onRemoveMeal,
+}: {
+  meals: FoodDiaryEntryView[];
+  onRemoveMeal: (mealId: string) => Promise<void>;
+}) {
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove(mealId: string) {
+    if (removingId) {
+      return;
+    }
+
+    setRemovingId(mealId);
+    setError(null);
+
+    try {
+      await onRemoveMeal(mealId);
+    } catch (caught) {
+      setError(describeFoodDiaryError(caught).message);
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   return (
     <section className="dia-rise">
       <h2 className="text-xs font-medium uppercase tracking-wider text-muted">Refeições de hoje</h2>
@@ -369,289 +450,238 @@ function MealsSection({ meals, onRemoveMeal }: { meals: DiaryMeal[]; onRemoveMea
           </li>
         )}
         {meals.map((meal) => {
-          const totals = mealTotals(meal);
+          const items = meal.items.filter((item) => !item.isRemoved);
+          const macros = mealMacroLine(meal);
 
           return (
             <li key={meal.id} className="dia-pop rounded-xl border border-border bg-surface p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
-                    <MealIcon meal={meal.mealType} size={18} />
+                    <MealIcon meal={meal.mealType as MealType} size={18} />
                   </span>
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-foreground">
-                      {MEAL_LABELS[meal.mealType]}
-                      <span className="ml-2 text-xs font-normal text-muted">{meal.loggedAtLabel}</span>
+                      {MEAL_LABELS[meal.mealType as MealType] ?? "Refeição"}
+                      <span className="ml-2 text-xs font-normal text-muted">{formatMealTime(meal.loggedAt)}</span>
                     </p>
                     <p className="mt-0.5 truncate text-xs text-muted">
-                      {meal.itens.map((item) => item.nome).join(" · ")}
+                      {items.map((item) => item.name).join(" · ") || "Sem itens"}
                     </p>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="font-display text-base font-bold text-foreground">
-                    {totals.kcal}
+                    {mealKcal(meal)}
                     <span className="ml-0.5 text-[10px] font-medium text-muted">kcal</span>
                   </span>
                   <button
                     type="button"
-                    onClick={() => onRemoveMeal(meal.id)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+                    onClick={() => void remove(meal.id)}
+                    disabled={removingId === meal.id}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
                     title="Remover refeição"
                   >
-                    <Trash2 size={15} />
+                    {removingId === meal.id ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
                   </button>
                 </div>
               </div>
               <p className="mt-3 text-[11px] text-muted">
-                P {totals.proteinaG}g · C {totals.carboG}g · G {totals.gorduraG}g
+                P {macros.proteinG}g · C {macros.carbG}g · G {macros.fatG}g
               </p>
             </li>
           );
         })}
       </ul>
+      {error && <InlineError message={error} />}
     </section>
   );
 }
 
-/* ─── Análise do dia ─────────────────────────────────────────────────────────── */
-
-function DayAnalysis({ day }: { day: DiaryDay }) {
-  const [state, setState] = useState<"idle" | "processing" | "ready">("idle");
-  const insights = useMemo(() => buildDayInsights(day), [day]);
-
-  function generate() {
-    setState("processing");
-    window.setTimeout(() => setState("ready"), 1500);
-  }
-
-  return (
-    <section className="dia-rise">
-      <h2 className="text-xs font-medium uppercase tracking-wider text-muted">Análise do dia</h2>
-
-      {state === "idle" && (
-        <button
-          type="button"
-          onClick={generate}
-          className="group mt-3 flex w-full items-center gap-4 rounded-2xl border border-accent/30 bg-surface p-5 text-left ring-1 ring-accent/10 transition-colors hover:bg-surface-hover"
-        >
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-on">
-            <Sparkles size={20} strokeWidth={1.8} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-bold text-foreground">Analisar meu dia</span>
-            <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-              Resumo do seu balanço e dicas do que ajustar nas próximas refeições.
-            </span>
-          </span>
-        </button>
-      )}
-
-      {state === "processing" && (
-        <div className="mt-3 space-y-3 rounded-2xl border border-border bg-surface p-5">
-          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Sparkles size={16} className="animate-pulse text-accent" />
-            Analisando seu dia...
-          </p>
-          <div className="dia-shimmer h-3.5 w-3/4 rounded-full" />
-          <div className="dia-shimmer h-3.5 w-full rounded-full" />
-          <div className="dia-shimmer h-3.5 w-2/3 rounded-full" />
-        </div>
-      )}
-
-      {state === "ready" && (
-        <div className="dia-pop mt-3 rounded-2xl border border-border bg-surface p-5">
-          <p className="text-sm font-semibold leading-relaxed text-foreground">{insights.headline}</p>
-          <ul className="mt-3 space-y-2.5">
-            {insights.tips.map((tip) => (
-              <li key={tip} className="flex gap-2.5 text-sm leading-relaxed text-muted-foreground">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                {tip}
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
-            <p className="text-[10px] leading-relaxed text-muted">
-              Sugestões automáticas — não substituem seu personal ou nutricionista.
-            </p>
-            <button
-              type="button"
-              onClick={generate}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface-strong px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-surface-hover"
-            >
-              <RotateCcw size={12} />
-              Atualizar
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* ─── Gasto calórico ─────────────────────────────────────────────────────────── */
+/* ─── Gasto calórico (atividades reais) ──────────────────────────────────────── */
 
 function BurnSection({
-  day,
+  activities,
   onAddActivity,
   onRemoveActivity,
-  onSetBurnMode,
-  onSetEstimatedBurn,
 }: {
-  day: DiaryDay;
-  onAddActivity: (label: string, kcal: number) => void;
-  onRemoveActivity: (activityId: string) => void;
-  onSetBurnMode: (mode: "atividades" | "estimativa") => void;
-  onSetEstimatedBurn: (kcal: number) => void;
+  activities: ActivityEnergyView[];
+  onAddActivity: (label: string, kcal: number) => Promise<void>;
+  onRemoveActivity: (activityId: string) => Promise<void>;
 }) {
   const [label, setLabel] = useState("");
   const [kcal, setKcal] = useState("");
+  const [pending, setPending] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  function addCustom() {
-    const value = Number(kcal);
-
-    if (!Number.isFinite(value) || value <= 0) {
+  async function add(activityLabel: string, value: number) {
+    if (!Number.isFinite(value) || value <= 0 || pending) {
       return;
     }
 
-    onAddActivity(label.trim() || "Atividade", Math.round(value));
-    setLabel("");
-    setKcal("");
+    setPending(true);
+    setError(null);
+
+    try {
+      await onAddActivity(activityLabel, Math.round(value));
+      setLabel("");
+      setKcal("");
+    } catch (caught) {
+      setError(describeFoodDiaryError(caught).message);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function remove(id: string) {
+    if (removingId) {
+      return;
+    }
+
+    setRemovingId(id);
+    setError(null);
+
+    try {
+      await onRemoveActivity(id);
+    } catch (caught) {
+      setError(describeFoodDiaryError(caught).message);
+    } finally {
+      setRemovingId(null);
+    }
   }
 
   return (
     <section className="dia-rise">
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-medium uppercase tracking-wider text-muted">Gasto calórico</h2>
-        <div className="flex rounded-lg border border-border bg-surface p-0.5 text-[11px] font-semibold">
-          {(["atividades", "estimativa"] as const).map((mode) => (
+        <p className="text-[11px] text-muted">Atividades registradas hoje</p>
+      </div>
+
+      <div className="mt-3 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {QUICK_ACTIVITIES.map((activity) => (
             <button
-              key={mode}
+              key={activity.label}
               type="button"
-              onClick={() => onSetBurnMode(mode)}
-              className={[
-                "rounded-md px-2.5 py-1 transition-colors",
-                day.burnMode === mode ? "bg-accent text-accent-on" : "text-muted hover:text-foreground",
-              ].join(" ")}
+              disabled={pending}
+              onClick={() => void add(activity.label, activity.kcal)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-success/50 hover:text-foreground disabled:opacity-50"
             >
-              {mode === "atividades" ? "Por atividade" : "Estimativa do dia"}
+              <Plus size={13} />
+              {activity.label}
+              <span className="font-bold text-success">+{activity.kcal}</span>
             </button>
           ))}
         </div>
-      </div>
 
-      {day.burnMode === "estimativa" ? (
-        <div className="mt-3 flex items-center gap-3 rounded-xl border border-border bg-surface p-4">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-success-soft text-success">
-            <Zap size={18} strokeWidth={1.8} />
-          </span>
-          <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">Gasto estimado de hoje</p>
-            <p className="text-xs text-muted">Um valor único para o dia inteiro</p>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <input
-              type="number"
-              min={0}
-              value={day.estimatedDailyBurn}
-              onChange={(event) => onSetEstimatedBurn(Math.max(Number(event.target.value) || 0, 0))}
-              className="h-10 w-24 rounded-lg border border-border bg-background px-3 text-right text-sm font-semibold text-foreground"
-              aria-label="Gasto estimado do dia em kcal"
-            />
-            <span className="text-xs text-muted">kcal</span>
-          </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="Outra atividade..."
+            value={label}
+            disabled={pending}
+            onChange={(event) => setLabel(event.target.value)}
+            className="h-10 flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+          />
+          <input
+            type="number"
+            placeholder="kcal"
+            min={0}
+            value={kcal}
+            disabled={pending}
+            onChange={(event) => setKcal(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void add(label.trim() || "Atividade", Number(kcal));
+            }}
+            className="h-10 w-20 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+          />
+          <button
+            type="button"
+            onClick={() => void add(label.trim() || "Atividade", Number(kcal))}
+            disabled={pending}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-strong text-foreground transition-colors hover:bg-surface-hover disabled:opacity-50"
+            title="Adicionar atividade"
+          >
+            {pending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+          </button>
         </div>
-      ) : (
-        <div className="mt-3 space-y-3">
-          <div className="flex flex-wrap gap-2">
-            {QUICK_ACTIVITIES.map((activity) => (
-              <button
-                key={activity.label}
-                type="button"
-                onClick={() => onAddActivity(activity.label, activity.kcal)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-success/50 hover:text-foreground"
+
+        {error && <InlineError message={error} />}
+
+        {activities.length > 0 && (
+          <ul className="space-y-2">
+            {activities.map((activity) => (
+              <li
+                key={activity.id}
+                className="dia-pop flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3"
               >
-                <Plus size={13} />
-                {activity.label}
-                <span className="font-bold text-success">+{activity.kcal}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Outra atividade..."
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              className="h-10 flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
-            />
-            <input
-              type="number"
-              placeholder="kcal"
-              min={0}
-              value={kcal}
-              onChange={(event) => setKcal(event.target.value)}
-              className="h-10 w-20 rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
-            />
-            <button
-              type="button"
-              onClick={addCustom}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-strong text-foreground transition-colors hover:bg-surface-hover"
-              title="Adicionar atividade"
-            >
-              <Check size={16} />
-            </button>
-          </div>
-
-          {day.activities.length > 0 && (
-            <ul className="space-y-2">
-              {day.activities.map((activity) => (
-                <li
-                  key={activity.id}
-                  className="dia-pop flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success-soft text-success">
-                      <Activity size={15} strokeWidth={1.8} />
-                    </span>
-                    <p className="truncate text-sm font-medium text-foreground">{activity.label}</p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-sm font-bold text-success">+{activity.kcal} kcal</span>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveActivity(activity.id)}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
-                      title="Remover atividade"
-                    >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success-soft text-success">
+                    <Activity size={15} strokeWidth={1.8} />
+                  </span>
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {activity.label ?? "Atividade"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-sm font-bold text-success">+{activity.kcalBurned} kcal</span>
+                  <button
+                    type="button"
+                    onClick={() => void remove(activity.id)}
+                    disabled={removingId === activity.id}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
+                    title="Remover atividade"
+                  >
+                    {removingId === activity.id ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
                       <Trash2 size={14} />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+                    )}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
 
 /* ─── Meta diária (editar) ───────────────────────────────────────────────────── */
 
-function TargetSection({ targetKcal, onSetTarget }: { targetKcal: number; onSetTarget: (kcal: number) => void }) {
+function TargetSection({
+  targetKcal,
+  onSetTarget,
+}: {
+  targetKcal: number;
+  onSetTarget: (kcal: number) => Promise<void>;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(targetKcal));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function save() {
+  async function save() {
     const parsed = Number(draft);
 
-    if (Number.isFinite(parsed) && parsed > 0) {
-      onSetTarget(Math.round(parsed));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setEditing(false);
+      return;
     }
 
-    setEditing(false);
+    setPending(true);
+    setError(null);
+
+    try {
+      await onSetTarget(Math.round(parsed));
+      setEditing(false);
+    } catch (caught) {
+      setError(describeFoodDiaryError(caught).message);
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
@@ -672,20 +702,22 @@ function TargetSection({ targetKcal, onSetTarget }: { targetKcal: number; onSetT
               min={1}
               autoFocus
               value={draft}
+              disabled={pending}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") save();
+                if (event.key === "Enter") void save();
               }}
               className="h-10 w-24 rounded-lg border border-border bg-background px-3 text-right text-sm font-semibold text-foreground"
               aria-label="Meta diária em kcal"
             />
             <button
               type="button"
-              onClick={save}
-              className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-accent-on transition-colors hover:bg-accent-hover"
+              onClick={() => void save()}
+              disabled={pending}
+              className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-accent-on transition-colors hover:bg-accent-hover disabled:opacity-60"
               title="Salvar meta"
             >
-              <Check size={16} />
+              {pending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
             </button>
           </div>
         ) : (
@@ -702,10 +734,39 @@ function TargetSection({ targetKcal, onSetTarget }: { targetKcal: number; onSetT
           </button>
         )}
       </div>
+      {error && <InlineError message={error} />}
     </section>
   );
 }
 
-function suggestMeal(): MealType {
-  return "almoco";
+/* ─── Helpers ────────────────────────────────────────────────────────────────── */
+
+function mealMacroLine(meal: FoodDiaryEntryView): { proteinG: number; carbG: number; fatG: number } {
+  const confirmed = meal.confirmedTotals;
+  const estimated = meal.estimatedTotals;
+
+  return {
+    proteinG: confirmed.proteinG ?? estimated.proteinG ?? 0,
+    carbG: confirmed.carbG ?? estimated.carbG ?? 0,
+    fatG: confirmed.fatG ?? estimated.fatG ?? 0,
+  };
+}
+
+function formatMealTime(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function suggestMealByHour(): MealType {
+  const hour = new Date().getHours();
+
+  if (hour < 10) return "cafe_da_manha";
+  if (hour < 14) return "almoco";
+  if (hour < 18) return "lanche";
+  return "jantar";
 }

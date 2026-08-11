@@ -1,42 +1,49 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Camera,
   Check,
   Flame,
   Lightbulb,
-  Plus,
+  RotateCcw,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 
-import type { DiaryItem, DiaryMeal, MealType } from "../_mock/diaryMock";
+import type {
+  ContainerSize,
+  FoodDiaryItemView,
+  MealOrigin,
+  MealType,
+} from "@/bff/modules/foodDiary/types";
 import {
-  DETECTION_BOXES,
-  FOOD_CATALOG,
+  analyzeEntry,
+  confirmEntry,
+  createEntry,
+  deleteEntry,
+  reviewEntry,
+  uploadEntryPhoto,
+} from "@/services/foodDiary/foodDiaryService";
+
+import {
+  CONTAINER_OPTIONS,
+  ESCONDIDOS_OPTIONS,
   MEAL_CHOICES,
   MEAL_LABELS,
-  ANALYSIS_OBSERVATIONS,
-  PROCESSING_STEPS,
-  buildAnalysisItems,
-  macrosForItem,
-  nextId,
-  sumMacros,
-} from "../_mock/diaryMock";
-import {
-  ESCONDIDOS_OPTIONS,
-  ORIGEM_OPTIONS,
+  MEAL_ORIGIN_OPTIONS,
   PREPARO_OPTIONS,
   PREP_TIPS,
 } from "../_content";
+import { describeFoodDiaryError, type FoodDiaryErrorInfo } from "../_errors";
+import { itemGrams, itemMacros, sumMacros } from "../_nutrition";
 import { useCountUp } from "./BalanceRing";
-import { ExamplePlate } from "./bits";
 
-type WizardStep = "prep" | "foto" | "contexto" | "processing" | "review" | "done";
+type WizardStep = "prep" | "foto" | "contexto" | "processing" | "review" | "done" | "error";
 
 const WIZARD_STEPS: Array<{ key: WizardStep; title: string }> = [
   { key: "prep", title: "Preparação" },
@@ -46,6 +53,23 @@ const WIZARD_STEPS: Array<{ key: WizardStep; title: string }> = [
   { key: "review", title: "Revisão" },
   { key: "done", title: "Pronto" },
 ];
+
+/** Rótulos de progresso durante a análise real (apenas UI — a IA roda de fato). */
+const PROCESSING_LABELS = [
+  "Enviando sua foto com segurança",
+  "Analisando enquadramento e iluminação",
+  "Identificando os alimentos do prato",
+  "Estimando as porções em gramas",
+  "Calculando os valores nutricionais",
+];
+
+function makeIdempotencyKey(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `wiz-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
 
 function Chip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
@@ -78,42 +102,104 @@ function ConfidenceDot({ value }: { value: number }) {
 
 export function MealWizard({
   initialMealType,
-  mealOrdinal,
-  onConfirm,
-  onCancel,
+  onSaved,
+  onExit,
 }: {
   initialMealType: MealType;
-  /** Quantas refeições já existem antes desta — alimenta o selo de celebração. */
-  mealOrdinal: number;
-  onConfirm: (meal: DiaryMeal) => void;
-  onCancel: () => void;
+  /** Chamado uma vez quando a refeição é confirmada (a página re-busca o dia). */
+  onSaved: () => void;
+  /** Fecha o fluxo e volta ao diário. */
+  onExit: () => void;
 }) {
   const [step, setStep] = useState<WizardStep>("prep");
+
+  // Contexto da refeição.
   const [mealType, setMealType] = useState<MealType>(initialMealType);
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
-  const [useExample, setUseExample] = useState(false);
-  const [origem, setOrigem] = useState<string | null>(null);
+  const [containerSize, setContainerSize] = useState<ContainerSize | null>(null);
+  const [mealOrigin, setMealOrigin] = useState<MealOrigin | null>(null);
   const [preparo, setPreparo] = useState<string | null>(null);
   const [escondidos, setEscondidos] = useState<string[]>([]);
-  const [processingIndex, setProcessingIndex] = useState(0);
-  const [items, setItems] = useState<DiaryItem[]>([]);
-  const [addFoodId, setAddFoodId] = useState("");
-  const [confirmedTotalKcal, setConfirmedTotalKcal] = useState(0);
-  const objectUrlRef = useRef<string | null>(null);
+  const [isShared, setIsShared] = useState(false);
+  const [notes, setNotes] = useState("");
 
-  const stepIndex = WIZARD_STEPS.findIndex((wizardStep) => wizardStep.key === step);
+  // Foto.
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+
+  // Processamento / revisão.
+  const [processingLabel, setProcessingLabel] = useState(0);
+  const [items, setItems] = useState<FoodDiaryItemView[]>([]);
+  const [gramsById, setGramsById] = useState<Record<string, number>>({});
+  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [qualityOverall, setQualityOverall] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [errorInfo, setErrorInfo] = useState<FoodDiaryErrorInfo | null>(null);
+  const [confirmedTotalKcal, setConfirmedTotalKcal] = useState(0);
+
+  // Controle de ciclo de vida (refs — sobrevivem a re-renders e ao unmount).
+  const objectUrlRef = useRef<string | null>(null);
+  const entryIdRef = useRef<string | null>(null);
+  const statusRef = useRef<string | null>(null);
+  const confirmedRef = useRef(false);
+  const cleanedRef = useRef(false);
+  const photoUploadedRef = useRef(false);
+  const idempotencyKeyRef = useRef<string>(makeIdempotencyKey());
+
+  const barStep: WizardStep = step === "error" ? "processing" : step;
+  const stepIndex = WIZARD_STEPS.findIndex((wizardStep) => wizardStep.key === barStep);
   const percent = Math.round(((stepIndex + 1) / WIZARD_STEPS.length) * 100);
 
-  const totals = useMemo(() => sumMacros(items), [items]);
+  const activeItems = useMemo(
+    () => items.filter((item) => !removedIds.has(item.id)),
+    [items, removedIds],
+  );
+  const totals = useMemo(
+    () => sumMacros(activeItems.map((item) => itemMacros(item, gramsById[item.id] ?? itemGrams(item)))),
+    [activeItems, gramsById],
+  );
   const reviewKcal = useCountUp(totals.kcal, 450);
   const doneKcal = useCountUp(step === "done" ? confirmedTotalKcal : 0, 1000);
 
-  /* ─── Foto local (nada é enviado a lugar nenhum) ─── */
+  /* ─── Limpeza de rascunho abandonado (Fase 11) ─── */
+
+  const cleanupDraft = useCallback(() => {
+    if (cleanedRef.current) {
+      return;
+    }
+
+    const id = entryIdRef.current;
+
+    // Só apaga se: existe rascunho, não foi confirmado e não está em processamento.
+    if (id && !confirmedRef.current && statusRef.current !== "processing") {
+      cleanedRef.current = true;
+      void deleteEntry(id).catch(() => {
+        // best-effort: um rascunho não confirmado não aparece no diário de qualquer forma.
+      });
+    }
+  }, []);
+
+  const exit = useCallback(() => {
+    cleanupDraft();
+    onExit();
+  }, [cleanupDraft, onExit]);
+
+  // Revoga o object URL e limpa o rascunho ao desmontar.
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+      }
+      cleanupDraft();
+    };
+  }, [cleanupDraft]);
+
+  /* ─── Foto local (preview via object URL) ─── */
 
   function handlePhotoSelect(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const selected = event.target.files?.[0];
 
-    if (!file) {
+    if (!selected) {
       return;
     }
 
@@ -121,108 +207,187 @@ export function MealWizard({
       URL.revokeObjectURL(objectUrlRef.current);
     }
 
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(selected);
     objectUrlRef.current = url;
     setPhotoUrl(url);
-    setUseExample(false);
+    setFile(selected);
+    photoUploadedRef.current = false;
   }
 
-  useEffect(() => {
-    return () => {
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(objectUrlRef.current);
-      }
-    };
-  }, []);
-
-  /* ─── Animação de processamento (timing de UI; dados são fixos) ─── */
+  /* ─── Rotação dos rótulos de progresso enquanto a análise real roda ─── */
 
   useEffect(() => {
     if (step !== "processing") {
       return;
     }
 
-    const timers: number[] = [];
+    // A reinicialização do índice acontece em runAnalysis (handler), não aqui,
+    // para não disparar setState síncrono no corpo do efeito.
+    const timer = window.setInterval(() => {
+      setProcessingLabel((current) => Math.min(current + 1, PROCESSING_LABELS.length - 1));
+    }, 1600);
 
-    PROCESSING_STEPS.forEach((_, index) => {
-      timers.push(window.setTimeout(() => setProcessingIndex(index), index * 850));
-    });
-
-    timers.push(
-      window.setTimeout(() => {
-        setItems(buildAnalysisItems());
-        setStep("review");
-      }, PROCESSING_STEPS.length * 850 + 550),
-    );
-
-    return () => {
-      timers.forEach((timer) => window.clearTimeout(timer));
-    };
+    return () => window.clearInterval(timer);
   }, [step]);
+
+  /* ─── Lifecycle real: draft → upload → analyze ─── */
+
+  const runAnalysis = useCallback(async () => {
+    setErrorInfo(null);
+    setProcessingLabel(0);
+    setStep("processing");
+
+    try {
+      // 1. Garante um rascunho (reutiliza se já criado numa tentativa anterior).
+      let id = entryIdRef.current;
+
+      if (!id) {
+        const created = await createEntry({
+          mealType,
+          containerSize: containerSize ?? undefined,
+          mealOrigin: mealOrigin ?? undefined,
+          preparationHint: preparo ?? undefined,
+          hiddenIngredients: escondidos.length > 0 ? escondidos : undefined,
+          isSharedPortion: isShared || undefined,
+          userNotes: notes.trim() || undefined,
+          idempotencyKey: idempotencyKeyRef.current,
+        });
+        id = created.entry.id;
+        entryIdRef.current = id;
+        statusRef.current = created.entry.status;
+      }
+
+      // 2. Envia a foto (só se ainda não enviada para esta seleção).
+      if (file && !photoUploadedRef.current) {
+        const uploaded = await uploadEntryPhoto(id, file);
+        statusRef.current = uploaded.entry.status;
+        photoUploadedRef.current = true;
+      }
+
+      // 3. Análise real (pode levar alguns segundos). Marca "processing" ANTES do
+      // await: se o aluno abandonar durante a análise, a limpeza NÃO apaga o
+      // registro em processamento (evita corrida com o processamento no servidor).
+      statusRef.current = "processing";
+      const analyzed = await analyzeEntry(id);
+      statusRef.current = analyzed.entry.status;
+
+      if (analyzed.entry.status === "completed") {
+        const entry = analyzed.entry;
+        const grams: Record<string, number> = {};
+
+        for (const item of entry.items) {
+          grams[item.id] = itemGrams(item);
+        }
+
+        setItems(entry.items);
+        setGramsById(grams);
+        setRemovedIds(new Set());
+        setQualityOverall(entry.qualityOverall);
+        setReviewError(null);
+        setStep("review");
+      } else {
+        // needsRetake ou estado inesperado → pedir nova foto.
+        setErrorInfo({
+          title: "Não consegui usar essa foto",
+          message: "Verifique o enquadramento e a iluminação e tente outra foto do prato inteiro, de cima.",
+          retake: true,
+          retryable: false,
+        });
+        setStep("error");
+      }
+    } catch (caught) {
+      setErrorInfo(describeFoodDiaryError(caught));
+      setStep("error");
+    }
+  }, [mealType, containerSize, mealOrigin, preparo, escondidos, isShared, notes, file]);
 
   /* ─── Revisão ─── */
 
-  function updateGrams(itemId: string, gramas: number) {
-    setItems((current) => current.map((item) => (item.id === itemId ? { ...item, gramas } : item)));
+  function updateGrams(itemId: string, grams: number) {
+    setGramsById((current) => ({ ...current, [itemId]: grams }));
   }
 
-  function removeItem(itemId: string) {
-    setItems((current) => current.filter((item) => item.id !== itemId));
+  function toggleRemoved(itemId: string) {
+    setRemovedIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+
+      return next;
+    });
   }
 
-  function addItem() {
-    const food = FOOD_CATALOG.find((catalogFood) => catalogFood.id === addFoodId);
+  async function confirmMeal() {
+    const id = entryIdRef.current;
 
-    if (!food) {
+    if (!id || activeItems.length === 0 || confirming) {
       return;
     }
 
-    setItems((current) => [
-      ...current,
-      {
-        id: nextId("item"),
-        foodId: food.id,
-        nome: food.nome,
-        categoria: food.categoria,
-        gramas: 100,
-        gramasEstimadas: 100,
-        confianca: 1,
-        fonte: "manual",
-      },
-    ]);
-    setAddFoodId("");
+    setConfirming(true);
+    setReviewError(null);
+
+    try {
+      // PATCH em lote (não por tecla): grama confirmada + remoções.
+      await reviewEntry(id, {
+        items: items.map((item) => ({
+          id: item.id,
+          gramsConfirmed: gramsById[item.id] ?? itemGrams(item),
+          isRemoved: removedIds.has(item.id),
+        })),
+      });
+
+      const confirmed = await confirmEntry(id);
+      confirmedRef.current = true;
+      statusRef.current = confirmed.entry.status;
+      setConfirmedTotalKcal(confirmed.entry.confirmedTotals.kcal ?? totals.kcal);
+      onSaved();
+      setStep("done");
+    } catch (caught) {
+      setReviewError(describeFoodDiaryError(caught).message);
+      setConfirming(false);
+    }
   }
 
-  function confirmMeal() {
-    setConfirmedTotalKcal(totals.kcal);
-    onConfirm({
-      id: nextId("meal"),
-      mealType,
-      loggedAtLabel: "agora",
-      itens: items,
-    });
-    setStep("done");
+  /* ─── Ações de erro ─── */
+
+  function retryFromError() {
+    if (!errorInfo) {
+      return;
+    }
+
+    if (errorInfo.retake) {
+      // Nova foto: mantém o rascunho, força novo upload.
+      photoUploadedRef.current = false;
+      setErrorInfo(null);
+      setStep("foto");
+    } else {
+      void runAnalysis();
+    }
   }
 
-  const availableFoods = FOOD_CATALOG.filter(
-    (food) => !items.some((item) => item.foodId === food.id),
-  );
-
-  const escondidosNote =
-    escondidos.length > 0
-      ? `Você marcou ${escondidos.join(", ").toLowerCase()} como não visíveis — na versão real eles entram na estimativa.`
-      : null;
+  const qualityNote =
+    qualityOverall === "media"
+      ? "A foto tinha qualidade média — confira as estimativas com atenção."
+      : qualityOverall === "ruim"
+        ? "A foto tinha qualidade baixa — as estimativas podem estar imprecisas."
+        : null;
 
   /* ─── Render ─── */
 
   return (
     <div className="dia-rise mx-auto max-w-2xl">
-      {/* Cabeçalho do fluxo (em página, dentro do AppShell) */}
       <div className="rounded-2xl border border-border bg-surface">
         <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-foreground">{WIZARD_STEPS[stepIndex]?.title}</p>
+              <p className="text-sm font-semibold text-foreground">
+                {step === "error" ? "Vamos ajustar" : WIZARD_STEPS[stepIndex]?.title}
+              </p>
               <p className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-muted">
                 Passo {stepIndex + 1} de {WIZARD_STEPS.length}
               </p>
@@ -236,7 +401,7 @@ export function MealWizard({
           </div>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={exit}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
             title="Fechar"
           >
@@ -294,18 +459,14 @@ export function MealWizard({
           {/* ── 2. Foto ── */}
           {step === "foto" && (
             <div className="space-y-4">
-              {photoUrl || useExample ? (
+              {photoUrl ? (
                 <div className="dia-pop relative overflow-hidden rounded-2xl border border-border">
-                  {useExample ? (
-                    <ExamplePlate className="aspect-[4/3] w-full" />
-                  ) : (
-                    <div
-                      role="img"
-                      aria-label="Pré-visualização do prato"
-                      className="aspect-[4/3] w-full bg-surface-strong bg-cover bg-center"
-                      style={{ backgroundImage: `url("${photoUrl}")` }}
-                    />
-                  )}
+                  <div
+                    role="img"
+                    aria-label="Pré-visualização do prato"
+                    className="aspect-[4/3] w-full bg-surface-strong bg-cover bg-center"
+                    style={{ backgroundImage: `url("${photoUrl}")` }}
+                  />
                 </div>
               ) : (
                 <label
@@ -331,26 +492,13 @@ export function MealWizard({
                 className="sr-only"
               />
 
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  htmlFor="dia-photo-input"
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface-strong px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
-                >
-                  <Camera size={14} />
-                  {photoUrl || useExample ? "Trocar foto" : "Abrir câmera"}
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUseExample(true);
-                    setPhotoUrl(null);
-                  }}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-strong px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
-                >
-                  <Lightbulb size={14} />
-                  Usar prato de exemplo
-                </button>
-              </div>
+              <label
+                htmlFor="dia-photo-input"
+                className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface-strong px-3.5 py-2 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
+              >
+                <Camera size={14} />
+                {photoUrl ? "Trocar foto" : "Abrir câmera"}
+              </label>
             </div>
           )}
 
@@ -368,13 +516,28 @@ export function MealWizard({
                 ))}
               </ContextGroup>
 
-              <ContextGroup label="Origem" optional>
-                {ORIGEM_OPTIONS.map((option) => (
+              <ContextGroup label="Tamanho do prato/recipiente" optional>
+                {CONTAINER_OPTIONS.map((option) => (
                   <Chip
-                    key={option}
-                    label={option}
-                    active={origem === option}
-                    onClick={() => setOrigem(origem === option ? null : option)}
+                    key={option.value}
+                    label={option.label}
+                    active={containerSize === option.value}
+                    onClick={() =>
+                      setContainerSize((current) => (current === option.value ? null : option.value))
+                    }
+                  />
+                ))}
+              </ContextGroup>
+
+              <ContextGroup label="Origem" optional>
+                {MEAL_ORIGIN_OPTIONS.map((option) => (
+                  <Chip
+                    key={option.value}
+                    label={option.label}
+                    active={mealOrigin === option.value}
+                    onClick={() =>
+                      setMealOrigin((current) => (current === option.value ? null : option.value))
+                    }
                   />
                 ))}
               </ContextGroup>
@@ -385,7 +548,7 @@ export function MealWizard({
                     key={option}
                     label={option}
                     active={preparo === option}
-                    onClick={() => setPreparo(preparo === option ? null : option)}
+                    onClick={() => setPreparo((current) => (current === option ? null : option))}
                   />
                 ))}
               </ContextGroup>
@@ -406,49 +569,56 @@ export function MealWizard({
                   />
                 ))}
               </ContextGroup>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-surface p-3.5">
+                <input
+                  type="checkbox"
+                  checked={isShared}
+                  onChange={(event) => setIsShared(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[#f26a1b]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-foreground">Vou dividir esta porção</span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">
+                    A IA estima o prato inteiro — você ajusta a sua parte na revisão.
+                  </span>
+                </span>
+              </label>
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted">
+                  Observações <span className="ml-1 normal-case text-muted/70">(opcional)</span>
+                </p>
+                <input
+                  type="text"
+                  value={notes}
+                  maxLength={200}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Ex.: molho à parte, pouco arroz..."
+                  className="mt-2 h-10 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+                />
+              </div>
             </div>
           )}
 
-          {/* ── 4. Processamento ── */}
+          {/* ── 4. Processamento (análise real) ── */}
           {step === "processing" && (
             <div className="space-y-5">
               <div className="relative overflow-hidden rounded-2xl border border-border">
-                {useExample ? (
-                  <ExamplePlate className="aspect-[4/3] w-full" />
-                ) : (
-                  <div
-                    className="aspect-[4/3] w-full bg-surface-strong bg-cover bg-center"
-                    style={photoUrl ? { backgroundImage: `url("${photoUrl}")` } : undefined}
-                  />
-                )}
+                <div
+                  className="aspect-[4/3] w-full bg-surface-strong bg-cover bg-center"
+                  style={photoUrl ? { backgroundImage: `url("${photoUrl}")` } : undefined}
+                />
                 <div className="dia-scanline" style={{ top: 0 }} />
-                {processingIndex >= 1 &&
-                  DETECTION_BOXES.slice(0, Math.min(processingIndex + 1, DETECTION_BOXES.length)).map(
-                    (box, index) => (
-                      <div
-                        key={box.label}
-                        className="dia-detection-box"
-                        style={{
-                          top: `${box.top}%`,
-                          left: `${box.left}%`,
-                          width: `${box.width}%`,
-                          height: `${box.height}%`,
-                          animationDelay: `${index * 120}ms`,
-                        }}
-                      >
-                        <span className="dia-detection-label">{box.label}</span>
-                      </div>
-                    ),
-                  )}
               </div>
 
               <ul className="space-y-2.5">
-                {PROCESSING_STEPS.map((label, index) => {
-                  if (index > processingIndex) {
+                {PROCESSING_LABELS.map((label, index) => {
+                  if (index > processingLabel) {
                     return null;
                   }
 
-                  const isDone = index < processingIndex;
+                  const isDone = index < processingLabel;
 
                   return (
                     <li key={label} className="dia-rise flex items-center gap-3 text-sm">
@@ -469,111 +639,158 @@ export function MealWizard({
                   );
                 })}
               </ul>
+
+              <p className="text-[11px] leading-relaxed text-muted">
+                A análise usa inteligência artificial e pode levar alguns segundos. Mantenha esta tela
+                aberta.
+              </p>
             </div>
           )}
 
-          {/* ── 5. Revisão ── */}
+          {/* ── Erro (falha ou foto rejeitada) ── */}
+          {step === "error" && errorInfo && (
+            <div className="flex flex-col items-center gap-4 py-6 text-center">
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-muted text-accent">
+                <AlertTriangle size={26} strokeWidth={1.8} />
+              </span>
+              <div>
+                <p className="text-sm font-bold text-foreground">{errorInfo.title}</p>
+                <p className="mx-auto mt-1.5 max-w-sm text-xs leading-relaxed text-muted">
+                  {errorInfo.message}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {(errorInfo.retake || errorInfo.retryable) && (
+                  <button
+                    type="button"
+                    onClick={retryFromError}
+                    className="inline-flex items-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover"
+                  >
+                    {errorInfo.retake ? <Camera size={16} /> : <RotateCcw size={16} />}
+                    {errorInfo.retake ? "Tirar outra foto" : "Tentar de novo"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={exit}
+                  className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-strong px-5 py-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-hover"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── 5. Revisão (itens reais) ── */}
           {step === "review" && (
             <div className="space-y-4">
               <p className="text-xs leading-relaxed text-muted">
-                A IA estima, você confirma. Ajuste as gramas, remova o que não está no prato ou adicione
-                o que faltou — as calorias recalculam na hora.
+                A IA estima, você confirma. Ajuste as gramas ou remova o que não está no prato — as
+                calorias recalculam na hora.
               </p>
+
+              {qualityNote && (
+                <p className="flex gap-2 rounded-xl border border-accent/30 bg-accent-muted p-3 text-[11px] leading-relaxed text-accent">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  {qualityNote}
+                </p>
+              )}
 
               <ul className="space-y-3">
                 {items.map((item) => {
-                  const macros = macrosForItem(item);
-                  const maxGrams = Math.max(Math.round((item.gramas * 2) / 5) * 5, 100);
+                  const removed = removedIds.has(item.id);
+                  const grams = gramsById[item.id] ?? itemGrams(item);
+                  const macros = itemMacros(item, grams);
+                  const maxGrams = Math.max(Math.round((grams * 2) / 5) * 5, 100);
 
                   return (
-                    <li key={item.id} className="rounded-xl border border-border bg-surface p-4">
+                    <li
+                      key={item.id}
+                      className={[
+                        "rounded-xl border p-4 transition-opacity",
+                        removed ? "border-dashed border-border bg-surface/50 opacity-60" : "border-border bg-surface",
+                      ].join(" ")}
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-bold text-foreground">{item.nome}</p>
+                          <p
+                            className={[
+                              "truncate text-sm font-bold text-foreground",
+                              removed ? "line-through" : "",
+                            ].join(" ")}
+                          >
+                            {item.name}
+                          </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                              {item.categoria}
-                            </span>
-                            <ConfidenceDot value={item.confianca} />
+                            {item.category && (
+                              <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {item.category}
+                              </span>
+                            )}
+                            {item.confidence !== null && <ConfidenceDot value={item.confidence} />}
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
                           <span className="font-display text-base font-bold text-foreground">
-                            {macros.kcal}
+                            {removed ? 0 : macros.kcal}
                             <span className="ml-0.5 text-[10px] font-medium text-muted">kcal</span>
                           </span>
                           <button
                             type="button"
-                            onClick={() => removeItem(item.id)}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
-                            title="Remover item"
+                            onClick={() => toggleRemoved(item.id)}
+                            className={[
+                              "flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
+                              removed
+                                ? "text-accent hover:bg-surface-hover"
+                                : "text-muted hover:bg-surface-hover hover:text-foreground",
+                            ].join(" ")}
+                            title={removed ? "Restaurar item" : "Remover item"}
                           >
-                            <Trash2 size={15} />
+                            {removed ? <RotateCcw size={15} /> : <Trash2 size={15} />}
                           </button>
                         </div>
                       </div>
 
-                      <div className="mt-3 flex items-center gap-3">
-                        <input
-                          type="range"
-                          min={5}
-                          max={maxGrams}
-                          step={5}
-                          value={item.gramas}
-                          onChange={(event) => updateGrams(item.id, Number(event.target.value))}
-                          className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
-                          aria-label={`Gramas de ${item.nome}`}
-                        />
-                        <span className="w-14 shrink-0 text-right text-xs font-semibold text-foreground">
-                          {item.gramas} g
-                        </span>
-                      </div>
+                      {!removed && (
+                        <>
+                          <div className="mt-3 flex items-center gap-3">
+                            <input
+                              type="range"
+                              min={5}
+                              max={maxGrams}
+                              step={5}
+                              value={grams}
+                              onChange={(event) => updateGrams(item.id, Number(event.target.value))}
+                              className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
+                              aria-label={`Gramas de ${item.name}`}
+                            />
+                            <span className="w-14 shrink-0 text-right text-xs font-semibold text-foreground">
+                              {grams} g
+                            </span>
+                          </div>
 
-                      <p className="mt-2 text-[11px] text-muted">
-                        P {macros.proteinaG}g · C {macros.carboG}g · G {macros.gorduraG}g
-                      </p>
+                          <p className="mt-2 text-[11px] text-muted">
+                            P {macros.proteinG}g · C {macros.carbG}g · G {macros.fatG}g
+                          </p>
+                        </>
+                      )}
                     </li>
                   );
                 })}
               </ul>
 
-              {/* Adicionar item que a IA não viu */}
-              <div className="flex items-center gap-2">
-                <select
-                  value={addFoodId}
-                  onChange={(event) => setAddFoodId(event.target.value)}
-                  className="h-10 flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-foreground"
-                  aria-label="Adicionar alimento"
-                >
-                  <option value="">Adicionar alimento que faltou...</option>
-                  {availableFoods.map((food) => (
-                    <option key={food.id} value={food.id}>
-                      {food.nome}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={addItem}
-                  disabled={addFoodId === ""}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-strong text-foreground transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Adicionar"
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
+              {/* Adição manual completa fica para depois do P1 (sem catálogo falso). */}
+              <p className="flex gap-2 rounded-xl border border-border bg-surface p-4 text-[11px] leading-relaxed text-muted">
+                <Lightbulb size={13} className="mt-0.5 shrink-0 text-accent" />
+                Faltou algo que a IA não viu? A inclusão manual de alimentos chega numa próxima
+                atualização. Por enquanto, ajuste as porções ou registre outra foto.
+              </p>
 
-              {/* Observações da "IA" */}
-              <div className="space-y-1.5 rounded-xl border border-border bg-surface p-4">
-                {[...ANALYSIS_OBSERVATIONS, ...(escondidosNote ? [escondidosNote] : [])].map(
-                  (observation) => (
-                    <p key={observation} className="flex gap-2 text-[11px] leading-relaxed text-muted">
-                      <Lightbulb size={13} className="mt-0.5 shrink-0 text-accent" />
-                      {observation}
-                    </p>
-                  ),
-                )}
-              </div>
+              {reviewError && (
+                <p className="text-[11px] font-medium text-accent" role="alert">
+                  {reviewError}
+                </p>
+              )}
 
               <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
                 <div>
@@ -587,11 +804,15 @@ export function MealWizard({
                 </div>
                 <button
                   type="button"
-                  disabled={items.length === 0}
-                  onClick={confirmMeal}
+                  disabled={activeItems.length === 0 || confirming}
+                  onClick={() => void confirmMeal()}
                   className="inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <Check size={16} strokeWidth={2.5} />
+                  {confirming ? (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent-on/40 border-t-accent-on" />
+                  ) : (
+                    <Check size={16} strokeWidth={2.5} />
+                  )}
                   Confirmar refeição
                 </button>
               </div>
@@ -621,12 +842,12 @@ export function MealWizard({
 
               <div className="dia-pop inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent-soft px-4 py-2 text-sm font-bold text-accent">
                 <Flame size={16} strokeWidth={2} />
-                {mealOrdinal >= 4 ? "Dia completo! 4+ refeições registradas" : `${mealOrdinal}ª refeição de hoje`}
+                Registrado no seu diário
               </div>
 
               <button
                 type="button"
-                onClick={onCancel}
+                onClick={exit}
                 className="mt-3 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover"
               >
                 Ver meu dia
@@ -636,13 +857,13 @@ export function MealWizard({
           )}
         </div>
 
-        {/* Rodapé de navegação — escondido no processamento e no done */}
-        {step !== "processing" && step !== "done" && (
+        {/* Rodapé de navegação — só nos passos de coleta (prep/foto/contexto) */}
+        {(step === "prep" || step === "foto" || step === "contexto") && (
           <div className="flex items-center gap-2 border-t border-border px-5 py-4">
             {step === "prep" ? (
               <button
                 type="button"
-                onClick={onCancel}
+                onClick={exit}
                 className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-surface-strong px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-hover"
               >
                 Cancelar
@@ -650,7 +871,7 @@ export function MealWizard({
             ) : (
               <button
                 type="button"
-                onClick={() => setStep(WIZARD_STEPS[Math.max(0, stepIndex - 1)].key)}
+                onClick={() => setStep(step === "foto" ? "prep" : "foto")}
                 className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-surface-strong px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-hover"
               >
                 <ArrowLeft size={16} />
@@ -658,24 +879,24 @@ export function MealWizard({
               </button>
             )}
 
-            {step !== "review" && (
+            {step === "contexto" ? (
               <button
                 type="button"
-                onClick={() => advance(step, setStep)}
-                disabled={step === "foto" && !photoUrl && !useExample}
+                onClick={() => void runAnalysis()}
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent py-3 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover"
+              >
+                <Sparkles size={16} />
+                Analisar prato
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setStep(step === "prep" ? "foto" : "contexto")}
+                disabled={step === "foto" && !file}
                 className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent py-3 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {step === "contexto" ? (
-                  <>
-                    <Sparkles size={16} />
-                    Analisar prato
-                  </>
-                ) : (
-                  <>
-                    Continuar
-                    <ArrowRight size={16} />
-                  </>
-                )}
+                Continuar
+                <ArrowRight size={16} />
               </button>
             )}
           </div>
@@ -703,16 +924,4 @@ function ContextGroup({
       <div className="mt-2 flex flex-wrap gap-2">{children}</div>
     </div>
   );
-}
-
-function advance(step: WizardStep, setStep: (step: WizardStep) => void) {
-  const flow: Record<WizardStep, WizardStep> = {
-    prep: "foto",
-    foto: "contexto",
-    contexto: "processing",
-    processing: "review",
-    review: "done",
-    done: "done",
-  };
-  setStep(flow[step]);
 }
