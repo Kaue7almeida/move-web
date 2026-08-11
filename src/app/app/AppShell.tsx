@@ -501,7 +501,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const isTrainer = me.primaryRole === "trainer";
-  const navigation = buildNavigation(me.primaryRole, me.isAdmin);
+  const navigation = buildNavigation(me.primaryRole, me.isAdmin, me.foodDiaryEnabled);
   const displayName = me.profile?.full_name ?? null;
   const greetingName = getFirstName(
     displayName,

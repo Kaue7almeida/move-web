@@ -37,7 +37,10 @@ export default function DiaryPage() {
   const [view, setView] = useState<DiaryView>("hoje");
   const [wizardMeal, setWizardMeal] = useState<MealType | null>(null);
 
-  if (!me.isStudent) {
+  // Beta gate: the Diário is only reachable for students with the feature enabled
+  // (FOOD_DIARY_BETA_EMAILS). The real security boundary is the API guard; this
+  // just blocks the visual page for anyone else.
+  if (!me.foodDiaryEnabled) {
     return (
       <RoleGuard
         title="Diário Alimentar"

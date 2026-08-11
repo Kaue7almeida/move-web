@@ -335,9 +335,11 @@ function RecentActivityCard({
 function StudentDailyHome({
   checklist,
   completedSessionCount,
+  foodDiaryEnabled,
 }: {
   checklist: ChecklistSummary;
   completedSessionCount: number;
+  foodDiaryEnabled: boolean;
 }) {
   const [summary, setSummary] = useState<StudentHomeSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -435,8 +437,9 @@ function StudentDailyHome({
         </div>
       </div>
 
-      {/* Diário Alimentar — bloco de alta relevância (hero secundário do dia) */}
-      <DiaryHomeCard />
+      {/* Diário Alimentar — bloco de alta relevância (hero secundário do dia).
+          Beta-gated: só aparece para quem tem o Diário habilitado (FOOD_DIARY_BETA_EMAILS). */}
+      {foodDiaryEnabled ? <DiaryHomeCard /> : null}
 
       {/* Scan corporal — módulo em destaque */}
       <Link
@@ -489,6 +492,7 @@ function StudentHome() {
         <StudentDailyHome
           checklist={checklist}
           completedSessionCount={me.studentStats?.completedSessionCount ?? 0}
+          foodDiaryEnabled={me.foodDiaryEnabled}
         />
       </div>
     );

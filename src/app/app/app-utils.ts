@@ -224,6 +224,7 @@ export function buildTrainerChecklist(me: MeResponse): ChecklistSummary {
 export function buildNavigation(
   primaryRole: PrimaryRole,
   isAdmin = false,
+  foodDiaryEnabled = false,
 ): AppNavigationItem[] {
   const adminItems: AppNavigationItem[] = isAdmin
     ? [{ href: "/app/admin", label: "Admin" }]
@@ -242,10 +243,16 @@ export function buildNavigation(
     ];
   }
 
+  // Food Diary is beta-gated (FOOD_DIARY_BETA_EMAILS). Hidden from the nav until
+  // the flag is enabled server-side; the real access boundary is the API guard.
+  const foodDiaryItems: AppNavigationItem[] = foodDiaryEnabled
+    ? [{ href: "/app/diario", label: "Diário" }]
+    : [];
+
   return [
     { href: "/app", label: "Início" },
     { href: "/app/treinos", label: "Treinos" },
-    { href: "/app/diario", label: "Diário" },
+    ...foodDiaryItems,
     { href: "/app/chat", label: "Chat Move" },
     { href: "/app/galeria", label: "Galeria" },
     { href: "/app/historico", label: "Histórico" },
