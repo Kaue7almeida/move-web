@@ -1,16 +1,31 @@
 import type { Json } from "@/bff/core/supabase/database.types";
 import { ApiError } from "@/bff/core/errors/ApiError";
+import { validateAndNormalizeAnalysis } from "@/bff/modules/foodDiary/analysisValidation";
+import {
+  buildLocalDayStrings,
+  isValidDateString,
+  localDayOf,
+  localDayWindow,
+  resolveTimeZone,
+} from "@/bff/modules/foodDiary/diaryDay";
+import type { OpenAiFoodDiaryClient } from "@/bff/modules/foodDiary/infra/OpenAiFoodDiaryClient";
+import type { FoodDiaryAiResponse } from "@/bff/modules/foodDiary/types/ai";
 import type { CurrentUserIdentity } from "@/bff/modules/profile/types";
-import type { IFoodDiaryRepository } from "@/bff/modules/foodDiary/types/IFoodDiaryRepository";
+import type {
+  CreateItemDbInput,
+  IFoodDiaryRepository,
+} from "@/bff/modules/foodDiary/types/IFoodDiaryRepository";
 import type {
   ActivityEnergyEntryRecord,
   ActivityEnergyResponse,
   ActivityEnergyView,
+  AnalyzeEntryInput,
   CalorieTargetResponse,
   CalorieTargetView,
   CreateActivityInput,
   CreateEntryDraftInput,
   DailyCalorieTargetRecord,
+  DayQueryOptions,
   FoodDiaryDeleteResponse,
   FoodDiaryEntryRecord,
   FoodDiaryEntryResponse,
@@ -18,29 +33,49 @@ import type {
   FoodDiaryHistoryResponse,
   FoodDiaryItemRecord,
   FoodDiaryItemView,
+  FoodDiaryPhotoResponse,
   FoodDiaryStatus,
   FoodDiaryTodayResponse,
+  ReviewEntryInput,
   UpsertCalorieTargetInput,
 } from "@/bff/modules/foodDiary/types";
 
-const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const HISTORY_DAYS = 7;
 const DEFAULT_PROTEIN_PERCENT = 25;
 const DEFAULT_CARB_PERCENT = 45;
 const DEFAULT_FAT_PERCENT = 30;
+const SIGNED_URL_TTL_SECONDS = 300;
+const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
+const UPLOADABLE_STATUSES: readonly FoodDiaryStatus[] = ["draft", "rejected", "failed"];
+
+const ALLOWED_MIME_TO_EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+type FoodDiaryServiceDeps = {
+  /** Lazy so non-AI endpoints don't require OPENAI_API_KEY at construction. */
+  aiClientFactory: () => OpenAiFoodDiaryClient;
+  /** Max concluded analyses per student per local day (P1: 6, env-configurable). */
+  dailyAnalysisLimit: number;
+};
 
 export class FoodDiaryService {
-  constructor(private readonly foodDiaryRepository: IFoodDiaryRepository) {}
+  constructor(
+    private readonly foodDiaryRepository: IFoodDiaryRepository,
+    private readonly deps: FoodDiaryServiceDeps,
+  ) {}
 
   /* ─── Today ─── */
 
   async getToday(
     identity: CurrentUserIdentity,
-    options: { date?: string },
+    options: DayQueryOptions,
   ): Promise<FoodDiaryTodayResponse> {
-    const day = resolveDayString(options.date);
-    const { startIso, endIso } = dayWindowIso(day);
+    const timeZone = resolveTimeZone(options.timeZone);
+    const day = resolveLocalDay(options.date, timeZone);
+    const { startIso, endIso } = localDayWindow(day, timeZone);
 
     const [targetRecord, entries, activities] = await Promise.all([
       this.foodDiaryRepository.findCurrentTargetForDate(identity.userId, day),
@@ -86,12 +121,13 @@ export class FoodDiaryService {
 
   async getHistory(
     identity: CurrentUserIdentity,
-    options: { date?: string },
+    options: DayQueryOptions,
   ): Promise<FoodDiaryHistoryResponse> {
-    const endDay = resolveDayString(options.date);
-    const dayStrings = buildDayStrings(endDay, HISTORY_DAYS);
-    const rangeStartIso = dayWindowIso(dayStrings[0]).startIso;
-    const rangeEndIso = dayWindowIso(dayStrings[dayStrings.length - 1]).endIso;
+    const timeZone = resolveTimeZone(options.timeZone);
+    const endDay = resolveLocalDay(options.date, timeZone);
+    const dayStrings = buildLocalDayStrings(endDay, HISTORY_DAYS);
+    const rangeStartIso = localDayWindow(dayStrings[0], timeZone).startIso;
+    const rangeEndIso = localDayWindow(dayStrings[dayStrings.length - 1], timeZone).endIso;
 
     const [entries, activities, targets] = await Promise.all([
       this.foodDiaryRepository.listConfirmedEntriesInRange(
@@ -105,11 +141,11 @@ export class FoodDiaryService {
 
     const days = dayStrings.map((dayString) => {
       const consumedKcal = entries
-        .filter((entry) => utcDateOf(entry.logged_at) === dayString)
+        .filter((entry) => localDayOf(entry.logged_at, timeZone) === dayString)
         .reduce((sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_kcal) ?? 0), 0);
 
       const burnedKcal = activities
-        .filter((activity) => utcDateOf(activity.logged_at) === dayString)
+        .filter((activity) => localDayOf(activity.logged_at, timeZone) === dayString)
         .reduce((sum, activity) => sum + toNumber(activity.kcal_burned), 0);
 
       // targets are ordered effective_from desc: the first one on/before the day applies.
@@ -136,7 +172,8 @@ export class FoodDiaryService {
     identity: CurrentUserIdentity,
     input: UpsertCalorieTargetInput,
   ): Promise<CalorieTargetResponse> {
-    const effectiveFrom = resolveDayString(input.effectiveFrom);
+    const timeZone = resolveTimeZone(input.timeZone);
+    const effectiveFrom = resolveLocalDay(input.effectiveFrom, timeZone);
     const proteinPercent = input.proteinPercent ?? DEFAULT_PROTEIN_PERCENT;
     const carbPercent = input.carbPercent ?? DEFAULT_CARB_PERCENT;
     const fatPercent = input.fatPercent ?? DEFAULT_FAT_PERCENT;
@@ -281,10 +318,398 @@ export class FoodDiaryService {
       throw new ApiError(404, "food_diary_entry_not_found", "Registro não encontrado.");
     }
 
+    // Remove the photo object (best-effort) now that the row and its items are gone.
+    if (record.photo_storage_path) {
+      await this.foodDiaryRepository.removePhotoObject(record.photo_storage_path);
+    }
+
     return { success: true };
   }
 
+  /* ─── Photo upload (private bucket) ─── */
+
+  async uploadEntryPhoto(
+    identity: CurrentUserIdentity,
+    entryId: string,
+    input: { file: File },
+  ): Promise<FoodDiaryPhotoResponse> {
+    const record = await this.requireEntryOwnedByStudent(entryId, identity.userId);
+
+    if (!UPLOADABLE_STATUSES.includes(record.status as FoodDiaryStatus)) {
+      throw new ApiError(
+        409,
+        "food_diary_entry_invalid_status",
+        "Este registro não aceita mais o envio de foto.",
+      );
+    }
+
+    const file = input.file;
+
+    if (!file || file.size <= 0) {
+      throw new ApiError(400, "food_diary_photo_required", "Envie a foto para continuar.");
+    }
+
+    if (file.size > MAX_PHOTO_BYTES) {
+      throw new ApiError(400, "food_diary_photo_too_large", "A imagem ultrapassa o limite de 15 MB.");
+    }
+
+    const ext = ALLOWED_MIME_TO_EXT[file.type];
+
+    if (!ext) {
+      throw new ApiError(
+        400,
+        "food_diary_photo_invalid_type",
+        "Formato de imagem não suportado. Use JPEG, PNG ou WEBP.",
+      );
+    }
+
+    // Unpredictable path, organized per user/entry. The client never supplies it.
+    const storagePath = `${identity.userId}/${entryId}/${crypto.randomUUID()}.${ext}`;
+    const previousPath = record.photo_storage_path;
+
+    const buffer = await file.arrayBuffer();
+    await this.foodDiaryRepository.uploadPhotoObject(storagePath, buffer, file.type);
+
+    let updated: FoodDiaryEntryRecord | null;
+
+    try {
+      updated = await this.foodDiaryRepository.setEntryPhoto({
+        entryId,
+        studentUserId: identity.userId,
+        storagePath,
+        contentType: file.type,
+      });
+    } catch (error: unknown) {
+      // Persistence failed after upload — remove the orphan object, then re-throw.
+      await this.foodDiaryRepository.removePhotoObject(storagePath);
+      throw error;
+    }
+
+    if (!updated) {
+      await this.foodDiaryRepository.removePhotoObject(storagePath);
+      throw new ApiError(404, "food_diary_entry_not_found", "Registro não encontrado.");
+    }
+
+    // Drop the previous photo (best-effort) now that the new one is persisted.
+    if (previousPath && previousPath !== storagePath) {
+      await this.foodDiaryRepository.removePhotoObject(previousPath);
+    }
+
+    const photoUrl = await this.foodDiaryRepository.createSignedReadUrl(
+      storagePath,
+      SIGNED_URL_TTL_SECONDS,
+    );
+    const items = await this.foodDiaryRepository.listItemsByEntryId(entryId);
+
+    return { entry: mapEntryToView(updated, items), photoUrl };
+  }
+
+  /* ─── AI analysis (draft → processing → completed | rejected | failed) ─── */
+
+  async analyzeEntry(
+    identity: CurrentUserIdentity,
+    entryId: string,
+    options: AnalyzeEntryInput,
+  ): Promise<FoodDiaryEntryResponse> {
+    const record = await this.requireEntryOwnedByStudent(entryId, identity.userId);
+    const status = record.status as FoodDiaryStatus;
+
+    if (status === "processing") {
+      throw new ApiError(409, "food_diary_entry_processing", "Esta análise já está em processamento.");
+    }
+    if (status === "completed") {
+      throw new ApiError(409, "food_diary_entry_already_analyzed", "Esta refeição já foi analisada.");
+    }
+    if (status === "confirmed") {
+      throw new ApiError(409, "food_diary_entry_already_confirmed", "Esta refeição já foi confirmada.");
+    }
+    if (!record.photo_storage_path) {
+      throw new ApiError(400, "food_diary_photo_required", "Envie a foto antes de analisar.");
+    }
+
+    // Daily quota (entry's local day). completed/confirmed count; a failed/rejected
+    // attempt does not — so it is checked before we spend the AI call.
+    await this.assertDailyQuota(identity.userId, record.logged_at, options.timeZone);
+
+    // Atomic transition guards double processing.
+    const transitioned = await this.foodDiaryRepository.transitionToProcessing(
+      entryId,
+      identity.userId,
+    );
+
+    if (!transitioned) {
+      throw new ApiError(409, "food_diary_entry_processing", "Esta análise já está em processamento.");
+    }
+
+    const signedUrl = await this.foodDiaryRepository.createSignedReadUrl(
+      record.photo_storage_path,
+      SIGNED_URL_TTL_SECONDS,
+    );
+    const aiClient = this.deps.aiClientFactory();
+    const analyzedAt = new Date().toISOString();
+
+    let aiResponse: FoodDiaryAiResponse;
+
+    try {
+      aiResponse = await aiClient.analyze({
+        imageUrl: signedUrl,
+        mealType: record.meal_type,
+        containerSize: record.container_size,
+        mealOrigin: record.meal_origin,
+        preparationHint: record.preparation_hint,
+        hiddenIngredients: toStringArray(record.hidden_ingredients),
+        isSharedPortion: record.is_shared_portion,
+        userNotes: record.user_notes,
+      });
+    } catch (error: unknown) {
+      // Photo unusable → rejected; any other AI failure → failed. Neither consumes quota.
+      const isRejection = error instanceof ApiError && error.code === "food_diary_image_rejected";
+      const failureReason = error instanceof ApiError ? error.code : "food_diary_ai_failed";
+
+      await this.foodDiaryRepository.replaceEntryItems(entryId, []);
+      await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+        status: isRejection ? "rejected" : "failed",
+        aiResult: {},
+        aiModel: aiClient.modelName,
+        confidence: null,
+        qualityOverall: null,
+        needsRetake: isRejection,
+        failureReason,
+        estimatedTotalKcal: null,
+        estimatedTotalProteinG: null,
+        estimatedTotalCarbG: null,
+        estimatedTotalFatG: null,
+        estimatedTotalFiberG: null,
+        analyzedAt,
+      });
+
+      throw error;
+    }
+
+    const analysis = aiResponse.analysis;
+    const aiResultJson = aiResponse as unknown as Json;
+
+    // Photo technically inadequate → rejected (needs_retake), no items.
+    if (analysis.needsRetake) {
+      await this.foodDiaryRepository.replaceEntryItems(entryId, []);
+      const rejected = await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+        status: "rejected",
+        aiResult: aiResultJson,
+        aiModel: aiClient.modelName,
+        confidence: null,
+        qualityOverall: analysis.qualityOverall,
+        needsRetake: true,
+        failureReason: "needs_retake",
+        estimatedTotalKcal: null,
+        estimatedTotalProteinG: null,
+        estimatedTotalCarbG: null,
+        estimatedTotalFatG: null,
+        estimatedTotalFiberG: null,
+        analyzedAt,
+      });
+
+      return this.composeEntryResponse(rejected);
+    }
+
+    // Deterministic validation of the (already schema-valid) payload.
+    const validation = validateAndNormalizeAnalysis(analysis);
+
+    if (!validation.ok) {
+      await this.foodDiaryRepository.replaceEntryItems(entryId, []);
+      await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+        status: "failed",
+        aiResult: aiResultJson,
+        aiModel: aiClient.modelName,
+        confidence: null,
+        qualityOverall: analysis.qualityOverall,
+        needsRetake: false,
+        failureReason: validation.code,
+        estimatedTotalKcal: null,
+        estimatedTotalProteinG: null,
+        estimatedTotalCarbG: null,
+        estimatedTotalFatG: null,
+        estimatedTotalFiberG: null,
+        analyzedAt,
+      });
+
+      throw new ApiError(422, validation.code, validation.message);
+    }
+
+    // Persist items FIRST, then mark completed — never a completed entry without items.
+    const items: CreateItemDbInput[] = validation.items.map((item, index) => ({
+      entryId,
+      position: index,
+      name: item.name,
+      preparation: item.preparation,
+      category: item.category,
+      gramsEstimated: item.gramsEstimated,
+      gramsConfirmed: null,
+      householdMeasure: item.householdMeasure,
+      confidence: item.confidence,
+      isPartiallyHidden: item.isPartiallyHidden,
+      isUserAdded: false,
+      nutritionSource: "ai_estimated",
+      kcalPer100g: item.kcalPer100g,
+      proteinPer100g: item.proteinPer100g,
+      carbPer100g: item.carbPer100g,
+      fatPer100g: item.fatPer100g,
+      fiberPer100g: item.fiberPer100g,
+      aiItemPayload: item.aiItemPayload as unknown as Json,
+    }));
+
+    await this.foodDiaryRepository.replaceEntryItems(entryId, items);
+
+    const completed = await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+      status: "completed",
+      aiResult: aiResultJson,
+      aiModel: aiClient.modelName,
+      confidence: validation.overallConfidence,
+      qualityOverall: analysis.qualityOverall,
+      needsRetake: false,
+      failureReason: null,
+      estimatedTotalKcal: validation.estimatedTotals.kcal,
+      estimatedTotalProteinG: validation.estimatedTotals.proteinG,
+      estimatedTotalCarbG: validation.estimatedTotals.carbG,
+      estimatedTotalFatG: validation.estimatedTotals.fatG,
+      estimatedTotalFiberG: validation.estimatedTotals.fiberG,
+      analyzedAt,
+    });
+
+    return this.composeEntryResponse(completed);
+  }
+
+  /* ─── Human review + confirmation ─── */
+
+  async reviewEntry(
+    identity: CurrentUserIdentity,
+    entryId: string,
+    input: ReviewEntryInput,
+  ): Promise<FoodDiaryEntryResponse> {
+    const record = await this.requireEntryOwnedByStudent(entryId, identity.userId);
+
+    if (record.status !== "completed") {
+      throw new ApiError(
+        409,
+        "food_diary_entry_not_reviewable",
+        "Só é possível revisar uma análise concluída.",
+      );
+    }
+
+    for (const edit of input.items ?? []) {
+      const updated = await this.foodDiaryRepository.updateItemForEntry({
+        itemId: edit.id,
+        entryId,
+        gramsConfirmed: edit.gramsConfirmed,
+        isRemoved: edit.isRemoved,
+        name: edit.name?.trim() ? edit.name.trim() : undefined,
+        preparation: edit.preparation,
+      });
+
+      if (!updated) {
+        throw new ApiError(404, "food_diary_item_not_found", "Item não encontrado nesta refeição.");
+      }
+    }
+
+    const addedItems = input.addedItems ?? [];
+
+    if (addedItems.length > 0) {
+      const existing = await this.foodDiaryRepository.listItemsByEntryId(entryId);
+      let nextPosition = existing.reduce((max, item) => Math.max(max, item.position), -1) + 1;
+
+      for (const added of addedItems) {
+        await this.foodDiaryRepository.insertManualItem({
+          entryId,
+          position: nextPosition,
+          name: added.name.trim(),
+          preparation: added.preparation ?? null,
+          category: added.category ?? null,
+          // Manual item: the informed grams are both the estimate and the confirmed value.
+          gramsEstimated: added.grams,
+          gramsConfirmed: added.grams,
+          householdMeasure: added.householdMeasure ?? null,
+          confidence: null,
+          isPartiallyHidden: false,
+          isUserAdded: true,
+          nutritionSource: "manual",
+          kcalPer100g: added.kcalPer100g,
+          proteinPer100g: added.proteinPer100g,
+          carbPer100g: added.carbPer100g,
+          fatPer100g: added.fatPer100g,
+          fiberPer100g: added.fiberPer100g ?? null,
+          aiItemPayload: {},
+        });
+
+        nextPosition += 1;
+      }
+    }
+
+    return this.composeEntryResponse(record);
+  }
+
+  async confirmEntry(
+    identity: CurrentUserIdentity,
+    entryId: string,
+  ): Promise<FoodDiaryEntryResponse> {
+    const record = await this.requireEntryOwnedByStudent(entryId, identity.userId);
+
+    if (record.status === "confirmed") {
+      throw new ApiError(
+        409,
+        "food_diary_entry_already_confirmed",
+        "Esta refeição já foi confirmada.",
+      );
+    }
+
+    if (record.status !== "completed") {
+      throw new ApiError(
+        409,
+        "food_diary_entry_not_confirmable",
+        "Só é possível confirmar uma análise concluída.",
+      );
+    }
+
+    const items = await this.foodDiaryRepository.listItemsByEntryId(entryId);
+    const activeItems = items.filter((item) => !item.is_removed);
+    const totals = computeConfirmedTotals(activeItems);
+
+    const confirmed = await this.foodDiaryRepository.finalizeEntryConfirmation(entryId, {
+      confirmedTotalKcal: totals.kcal,
+      confirmedTotalProteinG: totals.proteinG,
+      confirmedTotalCarbG: totals.carbG,
+      confirmedTotalFatG: totals.fatG,
+      confirmedTotalFiberG: totals.fiberG,
+      confirmedAt: new Date().toISOString(),
+    });
+
+    return this.composeEntryResponse(confirmed);
+  }
+
   /* ─── Internal ─── */
+
+  private async assertDailyQuota(
+    studentUserId: string,
+    loggedAt: string,
+    timeZone: string | undefined,
+  ): Promise<void> {
+    const resolvedTimeZone = resolveTimeZone(timeZone);
+    const day = localDayOf(loggedAt, resolvedTimeZone);
+    const { startIso, endIso } = localDayWindow(day, resolvedTimeZone);
+
+    const concluded = await this.foodDiaryRepository.countConcludedEntriesInRange(
+      studentUserId,
+      startIso,
+      endIso,
+    );
+
+    if (concluded >= this.deps.dailyAnalysisLimit) {
+      throw new ApiError(
+        429,
+        "food_diary_daily_limit_reached",
+        `Você atingiu o limite de ${this.deps.dailyAnalysisLimit} análises concluídas neste dia.`,
+        { limit: this.deps.dailyAnalysisLimit },
+      );
+    }
+  }
 
   private async composeEntryResponse(
     record: FoodDiaryEntryRecord,
@@ -308,48 +733,18 @@ export class FoodDiaryService {
   }
 }
 
-/* ─── Date helpers (UTC calendar days — consistent with the repo's ISO/UTC dates) ─── */
+/* ─── Date helpers (local calendar day resolution — see diaryDay.ts) ─── */
 
-function resolveDayString(date?: string): string {
+function resolveLocalDay(date: string | undefined, timeZone: string): string {
   if (date === undefined) {
-    return new Date().toISOString().slice(0, 10);
+    return localDayOf(new Date(), timeZone);
   }
 
-  if (!DATE_ONLY_REGEX.test(date)) {
-    throw new ApiError(400, "invalid_request", "Data inválida. Use o formato YYYY-MM-DD.");
-  }
-
-  const parsed = new Date(`${date}T00:00:00.000Z`);
-
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+  if (!isValidDateString(date)) {
     throw new ApiError(400, "invalid_request", "Data inválida. Use o formato YYYY-MM-DD.");
   }
 
   return date;
-}
-
-function dayWindowIso(dayString: string): { startIso: string; endIso: string } {
-  const start = new Date(`${dayString}T00:00:00.000Z`);
-
-  return {
-    startIso: start.toISOString(),
-    endIso: new Date(start.getTime() + DAY_MS).toISOString(),
-  };
-}
-
-function buildDayStrings(endDay: string, count: number): string[] {
-  const end = new Date(`${endDay}T00:00:00.000Z`);
-  const days: string[] = [];
-
-  for (let offset = count - 1; offset >= 0; offset -= 1) {
-    days.push(new Date(end.getTime() - offset * DAY_MS).toISOString().slice(0, 10));
-  }
-
-  return days;
-}
-
-function utcDateOf(iso: string): string {
-  return iso.slice(0, 10);
 }
 
 /* ─── Numeric helpers ─── */
@@ -418,6 +813,43 @@ function sumConfirmedTotals(entries: FoodDiaryEntryRecord[]): {
     fatG: round1(totals.fatG),
     fiberG: round1(totals.fiberG),
   };
+}
+
+/** Confirmed totals from persisted per-100g values × effective grams (confirmed ?? estimated). */
+function computeConfirmedTotals(items: FoodDiaryItemRecord[]): {
+  kcal: number;
+  proteinG: number;
+  carbG: number;
+  fatG: number;
+  fiberG: number;
+} {
+  const totals = { kcal: 0, proteinG: 0, carbG: 0, fatG: 0, fiberG: 0 };
+
+  for (const item of items) {
+    const grams = toNumberOrNull(item.grams_confirmed) ?? toNumber(item.grams_estimated);
+    const factor = grams / 100;
+    totals.kcal += toNumber(item.kcal_per_100g) * factor;
+    totals.proteinG += toNumber(item.protein_per_100g) * factor;
+    totals.carbG += toNumber(item.carb_per_100g) * factor;
+    totals.fatG += toNumber(item.fat_per_100g) * factor;
+    totals.fiberG += (toNumberOrNull(item.fiber_per_100g) ?? 0) * factor;
+  }
+
+  return {
+    kcal: roundKcal(totals.kcal),
+    proteinG: round1(totals.proteinG),
+    carbG: round1(totals.carbG),
+    fatG: round1(totals.fatG),
+    fiberG: round1(totals.fiberG),
+  };
+}
+
+function toStringArray(value: Json): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 function groupItemsByEntry(items: FoodDiaryItemRecord[]): Map<string, FoodDiaryItemRecord[]> {

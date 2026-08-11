@@ -3,9 +3,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/bff/core/errors/ApiError";
 import type { Database } from "@/bff/core/supabase/database.types";
 import type {
+  ConfirmEntryDbInput,
   CreateActivityDbInput,
   CreateEntryDraftDbInput,
+  CreateItemDbInput,
+  FinalizeEntryAnalysisDbInput,
   IFoodDiaryRepository,
+  SetEntryPhotoDbInput,
+  UpdateItemDbInput,
   UpsertCalorieTargetDbInput,
 } from "@/bff/modules/foodDiary/types/IFoodDiaryRepository";
 import type {
@@ -15,11 +20,44 @@ import type {
   FoodDiaryItemRecord,
 } from "@/bff/modules/foodDiary/types";
 
+const FOOD_DIARY_PHOTOS_BUCKET = "food-diary-photos";
+
 const DB_QUERY_FAILED = new ApiError(
   500,
   "food_diary_query_failed",
   "Falha ao consultar os dados do diário alimentar.",
 );
+
+const STORAGE_FAILED = new ApiError(
+  502,
+  "food_diary_storage_failed",
+  "Falha ao acessar o armazenamento de imagens.",
+);
+
+function toItemInsert(
+  input: CreateItemDbInput,
+): Database["public"]["Tables"]["food_diary_items"]["Insert"] {
+  return {
+    entry_id: input.entryId,
+    position: input.position,
+    name: input.name,
+    preparation: input.preparation,
+    category: input.category,
+    grams_estimated: input.gramsEstimated,
+    grams_confirmed: input.gramsConfirmed,
+    household_measure: input.householdMeasure,
+    confidence: input.confidence,
+    is_partially_hidden: input.isPartiallyHidden,
+    is_user_added: input.isUserAdded,
+    nutrition_source: input.nutritionSource,
+    kcal_per_100g: input.kcalPer100g,
+    protein_per_100g: input.proteinPer100g,
+    carb_per_100g: input.carbPer100g,
+    fat_per_100g: input.fatPer100g,
+    fiber_per_100g: input.fiberPer100g,
+    ai_item_payload: input.aiItemPayload,
+  };
+}
 
 export class FoodDiaryRepository implements IFoodDiaryRepository {
   constructor(private readonly supabase: SupabaseClient<Database>) {}
@@ -134,6 +172,137 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     return data ?? [];
   }
 
+  async countConcludedEntriesInRange(
+    studentUserId: string,
+    startIso: string,
+    endIso: string,
+  ): Promise<number> {
+    const { count, error } = await this.supabase
+      .from("food_diary_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("student_user_id", studentUserId)
+      .in("status", ["completed", "confirmed"])
+      .gte("logged_at", startIso)
+      .lt("logged_at", endIso);
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return count ?? 0;
+  }
+
+  async setEntryPhoto(input: SetEntryPhotoDbInput): Promise<FoodDiaryEntryRecord | null> {
+    const { data, error } = await this.supabase
+      .from("food_diary_entries")
+      .update({
+        photo_storage_path: input.storagePath,
+        photo_content_type: input.contentType,
+      })
+      .eq("id", input.entryId)
+      .eq("student_user_id", input.studentUserId)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "food_diary_entry_update_failed",
+        "Não foi possível salvar a foto no registro.",
+      );
+    }
+
+    return data;
+  }
+
+  async transitionToProcessing(
+    entryId: string,
+    studentUserId: string,
+  ): Promise<FoodDiaryEntryRecord | null> {
+    // Atomic: only flips when the row still has a processable status and belongs
+    // to the student. Concurrent calls: only one wins; the others get null.
+    const { data, error } = await this.supabase
+      .from("food_diary_entries")
+      .update({ status: "processing", processing_started_at: new Date().toISOString() })
+      .eq("id", entryId)
+      .eq("student_user_id", studentUserId)
+      .in("status", ["draft", "rejected", "failed"])
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw new ApiError(
+        500,
+        "food_diary_status_update_failed",
+        "Não foi possível atualizar o status do registro.",
+      );
+    }
+
+    return data;
+  }
+
+  async finalizeEntryAnalysis(
+    entryId: string,
+    input: FinalizeEntryAnalysisDbInput,
+  ): Promise<FoodDiaryEntryRecord> {
+    const payload: Database["public"]["Tables"]["food_diary_entries"]["Update"] = {
+      status: input.status,
+      ai_result: input.aiResult,
+      ai_model: input.aiModel,
+      confidence: input.confidence,
+      quality_overall: input.qualityOverall,
+      needs_retake: input.needsRetake,
+      failure_reason: input.failureReason,
+      estimated_total_kcal: input.estimatedTotalKcal,
+      estimated_total_protein_g: input.estimatedTotalProteinG,
+      estimated_total_carb_g: input.estimatedTotalCarbG,
+      estimated_total_fat_g: input.estimatedTotalFatG,
+      estimated_total_fiber_g: input.estimatedTotalFiberG,
+      analyzed_at: input.analyzedAt,
+    };
+
+    const { data, error } = await this.supabase
+      .from("food_diary_entries")
+      .update(payload)
+      .eq("id", entryId)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw new ApiError(500, "food_diary_finalize_failed", "Não foi possível finalizar a análise.");
+    }
+
+    return data;
+  }
+
+  async finalizeEntryConfirmation(
+    entryId: string,
+    input: ConfirmEntryDbInput,
+  ): Promise<FoodDiaryEntryRecord> {
+    const payload: Database["public"]["Tables"]["food_diary_entries"]["Update"] = {
+      status: "confirmed",
+      confirmed_total_kcal: input.confirmedTotalKcal,
+      confirmed_total_protein_g: input.confirmedTotalProteinG,
+      confirmed_total_carb_g: input.confirmedTotalCarbG,
+      confirmed_total_fat_g: input.confirmedTotalFatG,
+      confirmed_total_fiber_g: input.confirmedTotalFiberG,
+      confirmed_at: input.confirmedAt,
+    };
+
+    const { data, error } = await this.supabase
+      .from("food_diary_entries")
+      .update(payload)
+      .eq("id", entryId)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw new ApiError(500, "food_diary_confirm_failed", "Não foi possível confirmar a refeição.");
+    }
+
+    return data;
+  }
+
   /* ─── food_diary_items ─── */
 
   async listItemsByEntryId(entryId: string): Promise<FoodDiaryItemRecord[]> {
@@ -166,6 +335,82 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     }
 
     return data ?? [];
+  }
+
+  async replaceEntryItems(entryId: string, items: CreateItemDbInput[]): Promise<void> {
+    const { error: deleteError } = await this.supabase
+      .from("food_diary_items")
+      .delete()
+      .eq("entry_id", entryId);
+
+    if (deleteError) {
+      throw new ApiError(
+        500,
+        "food_diary_items_replace_failed",
+        "Não foi possível salvar os itens da análise.",
+      );
+    }
+
+    if (items.length === 0) {
+      return;
+    }
+
+    const { error: insertError } = await this.supabase
+      .from("food_diary_items")
+      .insert(items.map(toItemInsert));
+
+    if (insertError) {
+      throw new ApiError(
+        500,
+        "food_diary_items_replace_failed",
+        "Não foi possível salvar os itens da análise.",
+      );
+    }
+  }
+
+  async insertManualItem(input: CreateItemDbInput): Promise<FoodDiaryItemRecord> {
+    const { data, error } = await this.supabase
+      .from("food_diary_items")
+      .insert(toItemInsert(input))
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw new ApiError(500, "food_diary_item_create_failed", "Não foi possível adicionar o item.");
+    }
+
+    return data;
+  }
+
+  async updateItemForEntry(input: UpdateItemDbInput): Promise<FoodDiaryItemRecord | null> {
+    const payload: Database["public"]["Tables"]["food_diary_items"]["Update"] = {};
+
+    if (input.gramsConfirmed !== undefined) {
+      payload.grams_confirmed = input.gramsConfirmed;
+    }
+    if (input.isRemoved !== undefined) {
+      payload.is_removed = input.isRemoved;
+    }
+    if (input.name !== undefined) {
+      payload.name = input.name;
+    }
+    if (input.preparation !== undefined) {
+      payload.preparation = input.preparation;
+    }
+
+    const { data, error } = await this.supabase
+      .from("food_diary_items")
+      .update(payload)
+      .eq("id", input.itemId)
+      .eq("entry_id", input.entryId)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw new ApiError(500, "food_diary_item_update_failed", "Não foi possível atualizar o item.");
+    }
+
+    return data;
   }
 
   /* ─── daily_calorie_targets ─── */
@@ -290,5 +535,34 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     }
 
     return data ?? [];
+  }
+
+  /* ─── storage: food-diary-photos (private bucket) ─── */
+
+  async uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void> {
+    const { error } = await this.supabase.storage
+      .from(FOOD_DIARY_PHOTOS_BUCKET)
+      .upload(path, body, { contentType, upsert: false });
+
+    if (error) {
+      throw STORAGE_FAILED;
+    }
+  }
+
+  async removePhotoObject(path: string): Promise<void> {
+    // Best-effort: a missing object is not an error for our flow.
+    await this.supabase.storage.from(FOOD_DIARY_PHOTOS_BUCKET).remove([path]);
+  }
+
+  async createSignedReadUrl(path: string, ttlSeconds: number): Promise<string> {
+    const { data, error } = await this.supabase.storage
+      .from(FOOD_DIARY_PHOTOS_BUCKET)
+      .createSignedUrl(path, ttlSeconds);
+
+    if (error || !data?.signedUrl) {
+      throw STORAGE_FAILED;
+    }
+
+    return data.signedUrl;
   }
 }

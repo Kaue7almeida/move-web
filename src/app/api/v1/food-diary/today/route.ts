@@ -8,14 +8,17 @@ export async function GET(request: Request) {
   try {
     const authContext = await ensureFoodDiaryAccess(request);
 
-    // Optional local calendar day (YYYY-MM-DD). Not a security input — ownership is
-    // always the authenticated userId; this only selects which day to read. The
-    // service validates the format and defaults to the current server (UTC) day.
-    const date = new URL(request.url).searchParams.get("date") ?? undefined;
+    // Optional local calendar day (YYYY-MM-DD) + IANA time zone (tz). Not security
+    // inputs — ownership is always the authenticated userId; they only select which
+    // local day to read. The service validates the date and falls back to UTC for an
+    // absent/invalid tz.
+    const url = new URL(request.url);
+    const date = url.searchParams.get("date") ?? undefined;
+    const timeZone = url.searchParams.get("tz") ?? undefined;
 
     const result = await makeFoodDiaryService().getToday(
       { userId: authContext.userId, email: authContext.email },
-      { date },
+      { date, timeZone },
     );
 
     return NextResponse.json(result);

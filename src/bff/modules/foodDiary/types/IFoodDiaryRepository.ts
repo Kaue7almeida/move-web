@@ -19,6 +19,68 @@ export type CreateEntryDraftDbInput = {
   idempotencyKey: string | null;
 };
 
+export type SetEntryPhotoDbInput = {
+  entryId: string;
+  studentUserId: string;
+  storagePath: string;
+  contentType: string;
+};
+
+export type FinalizeEntryAnalysisDbInput = {
+  status: "completed" | "rejected" | "failed";
+  aiResult: Json;
+  aiModel: string | null;
+  confidence: number | null;
+  qualityOverall: string | null;
+  needsRetake: boolean;
+  failureReason: string | null;
+  estimatedTotalKcal: number | null;
+  estimatedTotalProteinG: number | null;
+  estimatedTotalCarbG: number | null;
+  estimatedTotalFatG: number | null;
+  estimatedTotalFiberG: number | null;
+  analyzedAt: string;
+};
+
+export type CreateItemDbInput = {
+  entryId: string;
+  position: number;
+  name: string;
+  preparation: string | null;
+  category: string | null;
+  gramsEstimated: number;
+  gramsConfirmed: number | null;
+  householdMeasure: string | null;
+  confidence: number | null;
+  isPartiallyHidden: boolean;
+  isUserAdded: boolean;
+  nutritionSource: string;
+  kcalPer100g: number;
+  proteinPer100g: number;
+  carbPer100g: number;
+  fatPer100g: number;
+  fiberPer100g: number | null;
+  aiItemPayload: Json;
+};
+
+export type UpdateItemDbInput = {
+  itemId: string;
+  entryId: string;
+  gramsConfirmed?: number | null;
+  isRemoved?: boolean;
+  name?: string;
+  preparation?: string | null;
+};
+
+export type ConfirmEntryDbInput = {
+  confirmedTotalKcal: number;
+  confirmedTotalProteinG: number;
+  confirmedTotalCarbG: number;
+  confirmedTotalFatG: number;
+  confirmedTotalFiberG: number;
+  confirmedAt: string;
+};
+
 export type UpsertCalorieTargetDbInput = {
   studentUserId: string;
   effectiveFrom: string;
@@ -57,19 +119,46 @@ export interface IFoodDiaryRepository {
     startIso: string,
     endIso: string,
   ): Promise<FoodDiaryEntryRecord[]>;
+  /** Count of completed+confirmed entries with logged_at in [startIso, endIso). */
+  countConcludedEntriesInRange(
+    studentUserId: string,
+    startIso: string,
+    endIso: string,
+  ): Promise<number>;
+  /** Persists the photo path/content-type on an entry owned by the student. */
+  setEntryPhoto(input: SetEntryPhotoDbInput): Promise<FoodDiaryEntryRecord | null>;
+  /**
+   * Atomically flips a draft/rejected/failed entry (owned by the student) to
+   * processing and stamps processing_started_at. Returns the row, or null when no
+   * row matched (already processing/completed/confirmed, or not owned).
+   */
+  transitionToProcessing(
+    entryId: string,
+    studentUserId: string,
+  ): Promise<FoodDiaryEntryRecord | null>;
+  finalizeEntryAnalysis(
+    entryId: string,
+    input: FinalizeEntryAnalysisDbInput,
+  ): Promise<FoodDiaryEntryRecord>;
+  finalizeEntryConfirmation(
+    entryId: string,
+    input: ConfirmEntryDbInput,
+  ): Promise<FoodDiaryEntryRecord>;
 
   // ── food_diary_items ──
   listItemsByEntryId(entryId: string): Promise<FoodDiaryItemRecord[]>;
   listItemsByEntryIds(entryIds: string[]): Promise<FoodDiaryItemRecord[]>;
+  /** Replaces all items of an entry (delete existing, insert the new batch). */
+  replaceEntryItems(entryId: string, items: CreateItemDbInput[]): Promise<void>;
+  insertManualItem(input: CreateItemDbInput): Promise<FoodDiaryItemRecord>;
+  updateItemForEntry(input: UpdateItemDbInput): Promise<FoodDiaryItemRecord | null>;
 
   // ── daily_calorie_targets ──
   upsertTarget(input: UpsertCalorieTargetDbInput): Promise<DailyCalorieTargetRecord>;
-  /** Latest target with effective_from <= dateString for the student, or null. */
   findCurrentTargetForDate(
     studentUserId: string,
     dateString: string,
   ): Promise<DailyCalorieTargetRecord | null>;
-  /** All targets with effective_from <= dateString, ordered effective_from desc. */
   listTargetsEffectiveUpTo(
     studentUserId: string,
     dateString: string,
@@ -77,11 +166,15 @@ export interface IFoodDiaryRepository {
 
   // ── activity_energy_entries ──
   createActivity(input: CreateActivityDbInput): Promise<ActivityEnergyEntryRecord>;
-  /** Deletes an activity owned by the student. Returns true when a row was removed. */
   deleteActivityForStudent(activityId: string, studentUserId: string): Promise<boolean>;
   listActivitiesInRange(
     studentUserId: string,
     startIso: string,
     endIso: string,
   ): Promise<ActivityEnergyEntryRecord[]>;
+
+  // ── storage: food-diary-photos (private bucket) ──
+  uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void>;
+  removePhotoObject(path: string): Promise<void>;
+  createSignedReadUrl(path: string, ttlSeconds: number): Promise<string>;
 }

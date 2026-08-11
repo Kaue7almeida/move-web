@@ -29,14 +29,24 @@ export type ActivityEnergySource = "manual" | "workout_session";
 
 /* ─── Service inputs (camelCase) ────────────────────────────────────────────── */
 
+/** Query options for day-scoped reads. timeZone is an IANA zone (e.g. America/Sao_Paulo). */
+export type DayQueryOptions = {
+  /** Local calendar day the client is viewing (YYYY-MM-DD). Defaults to "today" in timeZone. */
+  date?: string;
+  /** IANA time zone. Invalid/absent falls back to UTC (safe default). */
+  timeZone?: string;
+};
+
 export type UpsertCalorieTargetInput = {
   targetKcal: number;
   proteinPercent?: number;
   carbPercent?: number;
   fatPercent?: number;
   source?: CalorieTargetSource;
-  /** YYYY-MM-DD. Defaults to the current diary day (server UTC). */
+  /** YYYY-MM-DD. Defaults to the current diary day in timeZone. */
   effectiveFrom?: string;
+  /** IANA time zone used to resolve the default effectiveFrom. */
+  timeZone?: string;
 };
 
 export type CreateActivityInput = {
@@ -57,6 +67,39 @@ export type CreateEntryDraftInput = {
   isSharedPortion?: boolean;
   userNotes?: string;
   idempotencyKey?: string;
+};
+
+export type AnalyzeEntryInput = {
+  /** IANA time zone used to resolve the entry's local day for the daily quota. */
+  timeZone?: string;
+};
+
+/** A human edit to a detected item during review. Absent fields are left unchanged. */
+export type ReviewItemEdit = {
+  id: string;
+  gramsConfirmed?: number | null;
+  isRemoved?: boolean;
+  name?: string;
+  preparation?: string | null;
+};
+
+/** A manual item added during review (P1 has no TACO/USDA — values come from the payload). */
+export type ReviewItemAdd = {
+  name: string;
+  preparation?: string | null;
+  category?: string | null;
+  grams: number;
+  householdMeasure?: string | null;
+  kcalPer100g: number;
+  proteinPer100g: number;
+  carbPer100g: number;
+  fatPer100g: number;
+  fiberPer100g?: number | null;
+};
+
+export type ReviewEntryInput = {
+  items?: ReviewItemEdit[];
+  addedItems?: ReviewItemAdd[];
 };
 
 /* ─── API response shapes (camelCase) ───────────────────────────────────────── */
@@ -178,6 +221,11 @@ export type FoodDiaryHistoryResponse = {
 };
 
 export type FoodDiaryEntryResponse = { entry: FoodDiaryEntryView };
+export type FoodDiaryPhotoResponse = {
+  entry: FoodDiaryEntryView;
+  /** Short-lived signed URL for immediate preview. Never persisted. */
+  photoUrl: string;
+};
 export type CalorieTargetResponse = { target: CalorieTargetView };
 export type ActivityEnergyResponse = { activity: ActivityEnergyView };
 export type FoodDiaryDeleteResponse = { success: true };
