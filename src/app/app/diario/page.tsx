@@ -12,9 +12,12 @@ import { getHistory, getToday } from "@/services/foodDiary/foodDiaryService";
 
 import { useAppShell } from "../AppShellContext";
 import { PageHeader, RoleGuard } from "../app-ui";
+import { BottomSheet } from "./_components/BottomSheet";
+import { DiaryHud } from "./_components/DiaryHud";
 import { DiaryToday } from "./_components/DiaryToday";
 import { DiaryHistory } from "./_components/DiaryHistory";
 import { MealWizard } from "./_components/MealWizard";
+import { PlanOnboarding } from "./_components/PlanOnboarding";
 import "./diario.css";
 
 type DiaryView = "hoje" | "historico";
@@ -231,18 +234,17 @@ function TodayPanel({
   onStartMeal: (meal: MealType) => void;
   onRefresh: () => void;
 }) {
+  const [planSheetOpen, setPlanSheetOpen] = useState(false);
+
   if (state.status === "loading") {
     return <LoadingCard label="Carregando seu diário de hoje..." />;
   }
 
   if (state.status === "error") {
-    return (
-      <ErrorCard
-        message="Não foi possível carregar o diário de hoje."
-        onRetry={onRetry}
-      />
-    );
+    return <ErrorCard message="Não foi possível carregar o diário de hoje." onRetry={onRetry} />;
   }
+
+  const today = state.today;
 
   return (
     <div className="relative">
@@ -255,7 +257,36 @@ function TodayPanel({
           Atualizando…
         </div>
       )}
-      <DiaryToday today={state.today} onStartMeal={onStartMeal} onRefresh={onRefresh} />
+
+      {today.plan !== null && today.hud !== null ? (
+        <div className="space-y-6">
+          <DiaryHud today={today} hud={today.hud} />
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setPlanSheetOpen(true)}
+              className="text-[12px] font-semibold text-accent hover:underline"
+            >
+              Ajustar meu plano
+            </button>
+          </div>
+
+          <DiaryToday today={today} onStartMeal={onStartMeal} onRefresh={onRefresh} hud={today.hud} />
+
+          <BottomSheet open={planSheetOpen} onClose={() => setPlanSheetOpen(false)} title="Meu plano">
+            <PlanOnboarding
+              onSaved={() => {
+                setPlanSheetOpen(false);
+                onRefresh();
+              }}
+            />
+          </BottomSheet>
+        </div>
+      ) : (
+        // Primeiro uso do Diário 2.0: monta o plano (substitui a config simples).
+        <PlanOnboarding onSaved={onRefresh} />
+      )}
     </div>
   );
 }
