@@ -36,7 +36,6 @@ import {
   MEAL_CHOICES,
   MEAL_LABELS,
   MEAL_ORIGIN_OPTIONS,
-  PREPARO_OPTIONS,
   PREP_TIPS,
 } from "../_content";
 import { describeFoodDiaryError, type FoodDiaryErrorInfo } from "../_errors";
@@ -117,7 +116,6 @@ export function MealWizard({
   const [mealType, setMealType] = useState<MealType>(initialMealType);
   const [containerSize, setContainerSize] = useState<ContainerSize | null>(null);
   const [mealOrigin, setMealOrigin] = useState<MealOrigin | null>(null);
-  const [preparo, setPreparo] = useState<string | null>(null);
   const [escondidos, setEscondidos] = useState<string[]>([]);
   const [isShared, setIsShared] = useState(false);
   const [notes, setNotes] = useState("");
@@ -131,6 +129,7 @@ export function MealWizard({
   const [items, setItems] = useState<FoodDiaryItemView[]>([]);
   const [gramsById, setGramsById] = useState<Record<string, number>>({});
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [nameById, setNameById] = useState<Record<string, string>>({});
   const [qualityOverall, setQualityOverall] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -157,6 +156,17 @@ export function MealWizard({
   const totals = useMemo(
     () => sumMacros(activeItems.map((item) => itemMacros(item, gramsById[item.id] ?? itemGrams(item)))),
     [activeItems, gramsById],
+  );
+  // Itens ambíguos precisam de escolha do usuário antes de confirmar.
+  const unresolvedAmbiguous = useMemo(
+    () =>
+      activeItems.some(
+        (item) =>
+          item.identification === "ambiguous" &&
+          item.alternatives.length > 0 &&
+          !(item.id in nameById),
+      ),
+    [activeItems, nameById],
   );
   const reviewKcal = useCountUp(totals.kcal, 450);
   const doneKcal = useCountUp(step === "done" ? confirmedTotalKcal : 0, 1000);
@@ -246,7 +256,6 @@ export function MealWizard({
           mealType,
           containerSize: containerSize ?? undefined,
           mealOrigin: mealOrigin ?? undefined,
-          preparationHint: preparo ?? undefined,
           hiddenIngredients: escondidos.length > 0 ? escondidos : undefined,
           isSharedPortion: isShared || undefined,
           userNotes: notes.trim() || undefined,
@@ -282,6 +291,7 @@ export function MealWizard({
         setItems(entry.items);
         setGramsById(grams);
         setRemovedIds(new Set());
+        setNameById({});
         setQualityOverall(entry.qualityOverall);
         setReviewError(null);
         setStep("review");
@@ -299,7 +309,7 @@ export function MealWizard({
       setErrorInfo(describeFoodDiaryError(caught));
       setStep("error");
     }
-  }, [mealType, containerSize, mealOrigin, preparo, escondidos, isShared, notes, file]);
+  }, [mealType, containerSize, mealOrigin, escondidos, isShared, notes, file]);
 
   /* ─── Revisão ─── */
 
@@ -324,7 +334,7 @@ export function MealWizard({
   async function confirmMeal() {
     const id = entryIdRef.current;
 
-    if (!id || activeItems.length === 0 || confirming) {
+    if (!id || activeItems.length === 0 || confirming || unresolvedAmbiguous) {
       return;
     }
 
@@ -332,12 +342,14 @@ export function MealWizard({
     setReviewError(null);
 
     try {
-      // PATCH em lote (não por tecla): grama confirmada + remoções.
+      // PATCH em lote (não por tecla): grama confirmada + remoções + identidade
+      // escolhida para itens ambíguos.
       await reviewEntry(id, {
         items: items.map((item) => ({
           id: item.id,
           gramsConfirmed: gramsById[item.id] ?? itemGrams(item),
           isRemoved: removedIds.has(item.id),
+          ...(nameById[item.id] ? { name: nameById[item.id] } : {}),
         })),
       });
 
@@ -542,17 +554,8 @@ export function MealWizard({
                 ))}
               </ContextGroup>
 
-              <ContextGroup label="Preparo predominante" optional>
-                {PREPARO_OPTIONS.map((option) => (
-                  <Chip
-                    key={option}
-                    label={option}
-                    active={preparo === option}
-                    onClick={() => setPreparo((current) => (current === option ? null : option))}
-                  />
-                ))}
-              </ContextGroup>
-
+              {/* Sem "preparo do prato inteiro": preparo é POR ITEM (a IA devolve e o
+                  usuário revisa). Aqui fica só um contexto textual opcional (Observações). */}
               <ContextGroup label="Tem algo que não aparece na foto?" optional>
                 {ESCONDIDOS_OPTIONS.map((option) => (
                   <Chip
@@ -719,7 +722,7 @@ export function MealWizard({
                               removed ? "line-through" : "",
                             ].join(" ")}
                           >
-                            {item.name}
+                            {nameById[item.id] ?? item.name}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             {item.category && (
@@ -750,6 +753,39 @@ export function MealWizard({
                           </button>
                         </div>
                       </div>
+
+                      {item.identification === "ambiguous" && item.alternatives.length > 0 && !removed && (
+                        <div className="mt-3 rounded-lg border border-accent/30 bg-accent-muted/40 p-2.5">
+                          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-accent">
+                            <AlertTriangle size={12} /> Tipo incerto — confirme qual é:
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {[...item.alternatives, "Outro"].map((alt) => {
+                              const chosen = nameById[item.id];
+                              const isOutro = alt === "Outro";
+                              const selected = isOutro ? chosen === item.name : chosen === alt;
+
+                              return (
+                                <button
+                                  key={alt}
+                                  type="button"
+                                  onClick={() =>
+                                    setNameById((current) => ({ ...current, [item.id]: isOutro ? item.name : alt }))
+                                  }
+                                  className={[
+                                    "rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+                                    selected
+                                      ? "border-accent bg-accent text-accent-on"
+                                      : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+                                  ].join(" ")}
+                                >
+                                  {alt}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       {!removed && (
                         <>
@@ -792,6 +828,12 @@ export function MealWizard({
                 </p>
               )}
 
+              {unresolvedAmbiguous && (
+                <p className="flex items-center gap-1.5 text-[11px] font-medium text-accent" role="alert">
+                  <AlertTriangle size={13} /> Escolha o tipo dos itens marcados como incertos para confirmar.
+                </p>
+              )}
+
               <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-wider text-muted">
@@ -804,7 +846,7 @@ export function MealWizard({
                 </div>
                 <button
                   type="button"
-                  disabled={activeItems.length === 0 || confirming}
+                  disabled={activeItems.length === 0 || confirming || unresolvedAmbiguous}
                   onClick={() => void confirmMeal()}
                   className="inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 >
