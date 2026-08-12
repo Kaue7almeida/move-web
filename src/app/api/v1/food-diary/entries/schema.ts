@@ -9,6 +9,8 @@ const isoDateTime = z
 export const createEntryBodySchema = z.object({
   mealType: z.enum(["cafe_da_manha", "almoco", "lanche", "jantar", "extra"]),
   loggedAt: isoDateTime.optional(),
+  inputKind: z.enum(["photo", "text", "snack"]).optional(),
+  textDescription: z.string().trim().min(1).max(1000).optional(),
   containerSize: z.enum(["pequeno", "medio", "grande"]).optional(),
   mealOrigin: z.enum(["caseiro", "restaurante", "embalado"]).optional(),
   preparationHint: z.string().trim().max(200).optional(),

@@ -57,10 +57,16 @@ export type CreateActivityInput = {
   loggedAt?: string;
 };
 
+export type EntryInputKind = "photo" | "text" | "snack";
+
 export type CreateEntryDraftInput = {
   mealType: MealType;
   /** ISO timestamp the meal counts under. Defaults to now. */
   loggedAt?: string;
+  /** How the meal is described: photo (default), free text, or snack. */
+  inputKind?: EntryInputKind;
+  /** Free-text description for text/snack entries. */
+  textDescription?: string;
   containerSize?: ContainerSize;
   mealOrigin?: MealOrigin;
   preparationHint?: string;

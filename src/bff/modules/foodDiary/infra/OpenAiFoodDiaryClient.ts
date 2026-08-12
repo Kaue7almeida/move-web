@@ -3,6 +3,7 @@ import {
   foodDiaryAiResponseSchema,
   type FoodDiaryAiInput,
   type FoodDiaryAiResponse,
+  type FoodDiaryTextInput,
 } from "@/bff/modules/foodDiary/types/ai";
 
 /* ─── OpenAI Responses API internal types ────────────────────────────────────── */
@@ -192,6 +193,60 @@ function buildUserContent(input: FoodDiaryAiInput): InputContent[] {
   ];
 }
 
+function buildTextSystemPrompt(): string {
+  return `\
+You are a meal analysis engine for the Move fitness app.
+
+CONTEXT: You receive a TEXT description of what someone ate (NO photo). Identify the foods, estimate each food's portion in grams, and estimate its per-100g nutrients. This is a fitness estimate — NOT a medical service, and NOT a promise of precision.
+
+METHOD:
+• Parse quantities from the text ("2 pães de queijo", "um prato de", "uma barra pequena"). If a quantity is missing, assume a single typical serving and note the assumption in observations.
+• If the user states an approximate total kcal, treat it as a hint, not ground truth — still return per-item macros.
+
+STRICT CONSTRAINTS:
+• Return valid JSON only, matching the provided schema exactly. No prose outside the structure.
+• Do NOT reveal your reasoning/chain-of-thought — only the final structured result.
+• All human-readable strings must be in pt-BR.
+• NEVER infer medical conditions or give clinical/prescriptive advice.
+
+PER ITEM:
+• name (pt-BR). preparation POR ITEM (e.g. "frito","assado","cru") or null.
+• category: "carboidrato","proteina","vegetal","fruta","gordura","bebida","molho","outro".
+• identification: "identified" | "ambiguous" | "unknown". Use "ambiguous" only when the text truly does not disambiguate a food whose calories differ a lot; list alternatives in pt-BR. NEVER fake certainty.
+• alternatives: pt-BR list when ambiguous; else [].
+• gramsEstimated (> 0). householdMeasure (pt-BR) or null.
+• confidence: 0.0–1.0 self-reported certainty (NOT accuracy). isPartiallyHidden: false for text.
+• kcalPer100g/proteinPer100g/carbPer100g/fatPer100g per 100 g (non-negative). fiberPer100g per 100 g or null.
+• uncertainty: short pt-BR note or null.
+
+QUALITY:
+• qualityOverall: "boa" | "media" | "ruim" (how usable the DESCRIPTION is).
+• needsRetake: false (there is no photo to retake) unless the description is empty/nonsensical.
+• confidence: 0.0–1.0 overall.
+
+observations: short pt-BR notes (assumptions about quantity, hidden fats/oils). Never medical.`;
+}
+
+function buildTextContent(input: FoodDiaryTextInput): InputContent[] {
+  const lines: string[] = [
+    input.isSnack
+      ? "Analise este docinho/petisco a partir da descrição do usuário."
+      : "Analise esta refeição a partir da descrição do usuário.",
+    "",
+    `Tipo de refeição: ${MEAL_TYPE_LABELS[input.mealType] ?? input.mealType}`,
+    `Descrição: ${input.description}`,
+  ];
+
+  if (input.containerSize) {
+    lines.push(`Tamanho/porção: ${CONTAINER_SIZE_LABELS[input.containerSize] ?? input.containerSize}`);
+  }
+  if (input.userNotes) {
+    lines.push(`Observações do usuário: ${input.userNotes}`);
+  }
+
+  return [{ type: "input_text", text: lines.join("\n") }];
+}
+
 /* ─── Client ─────────────────────────────────────────────────────────────────── */
 
 export class OpenAiFoodDiaryClient {
@@ -207,11 +262,31 @@ export class OpenAiFoodDiaryClient {
     return this.model;
   }
 
+  /** Photo meal analysis (image + context). */
   async analyze(input: FoodDiaryAiInput): Promise<FoodDiaryAiResponse> {
+    return this.send(buildSystemPrompt(), buildUserContent(input), {
+      code: "food_diary_image_rejected",
+      message: "A imagem não foi aceita pelo serviço de análise. Verifique o enquadramento e a iluminação.",
+    });
+  }
+
+  /** Text meal / snack analysis (no photo) — same structured output contract. */
+  async analyzeText(input: FoodDiaryTextInput): Promise<FoodDiaryAiResponse> {
+    return this.send(buildTextSystemPrompt(), buildTextContent(input), {
+      code: "food_diary_text_rejected",
+      message: "Não consegui interpretar a descrição. Tente detalhar melhor o que você comeu.",
+    });
+  }
+
+  private async send(
+    instructions: string,
+    content: InputContent[],
+    refusal: { code: string; message: string },
+  ): Promise<FoodDiaryAiResponse> {
     const requestBody: ResponsesApiBody = {
       model: this.model,
-      instructions: buildSystemPrompt(),
-      input: [{ role: "user", content: buildUserContent(input) }],
+      instructions,
+      input: [{ role: "user", content }],
       store: false,
       text: {
         format: {
@@ -284,14 +359,11 @@ export class OpenAiFoodDiaryClient {
     const messageOutput = responseData.output?.find((item) => item.type === "message");
 
     if (messageOutput) {
-      const refusal = messageOutput.content.find((item) => item.type === "refusal");
+      const refusalItem = messageOutput.content.find((item) => item.type === "refusal");
 
-      if (refusal) {
-        throw new ApiError(
-          422,
-          "food_diary_image_rejected",
-          "A imagem não foi aceita pelo serviço de análise. Verifique o enquadramento e a iluminação.",
-        );
+      if (refusalItem) {
+        // Modality-specific refusal (image vs text), supplied by the caller.
+        throw new ApiError(422, refusal.code, refusal.message);
       }
     }
 

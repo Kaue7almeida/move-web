@@ -369,13 +369,17 @@ export class FoodDiaryService {
 
     const preparationHint = input.preparationHint?.trim();
     const userNotes = input.userNotes?.trim();
+    const textDescription = input.textDescription?.trim();
     const hiddenIngredients: Json = input.hiddenIngredients ?? [];
+    const inputKind = input.inputKind ?? "photo";
 
     try {
       const record = await this.foodDiaryRepository.createEntryDraft({
         studentUserId: identity.userId,
         mealType: input.mealType,
         loggedAt: input.loggedAt ?? new Date().toISOString(),
+        inputKind,
+        textDescription: textDescription ? textDescription : null,
         containerSize: input.containerSize ?? null,
         mealOrigin: input.mealOrigin ?? null,
         preparationHint: preparationHint ? preparationHint : null,
@@ -541,8 +545,13 @@ export class FoodDiaryService {
     if (status === "confirmed") {
       throw new ApiError(409, "food_diary_entry_already_confirmed", "Esta refeição já foi confirmada.");
     }
-    if (!record.photo_storage_path) {
+    const inputKind = record.input_kind;
+
+    if (inputKind === "photo" && !record.photo_storage_path) {
       throw new ApiError(400, "food_diary_photo_required", "Envie a foto antes de analisar.");
+    }
+    if ((inputKind === "text" || inputKind === "snack") && !record.text_description) {
+      throw new ApiError(400, "food_diary_text_required", "Descreva o que você comeu antes de analisar.");
     }
 
     // Daily quota (entry's local day). completed/confirmed count; a failed/rejected
@@ -559,26 +568,37 @@ export class FoodDiaryService {
       throw new ApiError(409, "food_diary_entry_processing", "Esta análise já está em processamento.");
     }
 
-    const signedUrl = await this.foodDiaryRepository.createSignedReadUrl(
-      record.photo_storage_path,
-      SIGNED_URL_TTL_SECONDS,
-    );
     const aiClient = this.deps.aiClientFactory();
     const analyzedAt = new Date().toISOString();
 
     let aiResponse: FoodDiaryAiResponse;
 
     try {
-      aiResponse = await aiClient.analyze({
-        imageUrl: signedUrl,
-        mealType: record.meal_type,
-        containerSize: record.container_size,
-        mealOrigin: record.meal_origin,
-        preparationHint: record.preparation_hint,
-        hiddenIngredients: toStringArray(record.hidden_ingredients),
-        isSharedPortion: record.is_shared_portion,
-        userNotes: record.user_notes,
-      });
+      if (inputKind === "text" || inputKind === "snack") {
+        // Text/snack: no photo — same structured output + review model.
+        aiResponse = await aiClient.analyzeText({
+          mealType: record.meal_type,
+          description: record.text_description ?? "",
+          containerSize: record.container_size,
+          userNotes: record.user_notes,
+          isSnack: inputKind === "snack",
+        });
+      } else {
+        const signedUrl = await this.foodDiaryRepository.createSignedReadUrl(
+          record.photo_storage_path as string,
+          SIGNED_URL_TTL_SECONDS,
+        );
+        aiResponse = await aiClient.analyze({
+          imageUrl: signedUrl,
+          mealType: record.meal_type,
+          containerSize: record.container_size,
+          mealOrigin: record.meal_origin,
+          preparationHint: record.preparation_hint,
+          hiddenIngredients: toStringArray(record.hidden_ingredients),
+          isSharedPortion: record.is_shared_portion,
+          userNotes: record.user_notes,
+        });
+      }
     } catch (error: unknown) {
       // Photo unusable → rejected; any other AI failure → failed. Neither consumes quota.
       const isRejection = error instanceof ApiError && error.code === "food_diary_image_rejected";

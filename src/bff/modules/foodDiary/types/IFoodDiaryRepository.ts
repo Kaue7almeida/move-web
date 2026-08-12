@@ -15,6 +15,8 @@ export type CreateEntryDraftDbInput = {
   studentUserId: string;
   mealType: string;
   loggedAt: string;
+  inputKind: string;
+  textDescription: string | null;
   containerSize: string | null;
   mealOrigin: string | null;
   preparationHint: string | null;

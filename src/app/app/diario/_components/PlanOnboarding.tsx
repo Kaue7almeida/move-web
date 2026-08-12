@@ -17,6 +17,7 @@ import {
 import type { FoodDiaryPlanView, TmbSuggestion } from "@/bff/modules/foodDiary/types/plan";
 import { getPlan, upsertPlan } from "@/services/foodDiary/foodDiaryService";
 
+import { useAppShell } from "../../AppShellContext";
 import { describeFoodDiaryError } from "../_errors";
 import { formatKcal } from "../_content";
 
@@ -30,6 +31,11 @@ const ROUTINES: RoutineLevel[] = ["sedentary", "light", "moderate", "high"];
  * fonte da verdade ao salvar.
  */
 export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
+  const { me } = useAppShell();
+  // MoveScan é student-only; não oferecer um CTA de Scan que quebraria para um
+  // trainer/personal. Ele usa % de gordura ou TMB manual.
+  const canScan = me.isStudent;
+
   const [suggestion, setSuggestion] = useState<TmbSuggestion | null>(null);
   const [existing, setExisting] = useState<FoodDiaryPlanView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -231,7 +237,7 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
           </div>
         )}
 
-        {!suggestion?.hasScan && (
+        {canScan && !suggestion?.hasScan && (
           <Link
             href="/app/scan"
             className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent hover:underline"

@@ -71,6 +71,20 @@ const BY_CODE: Record<string, FoodDiaryErrorInfo> = {
     retryable: true,
   },
 
+  /* Texto/descrição não interpretável */
+  food_diary_text_rejected: {
+    title: "Não entendi a descrição",
+    message: "Tente detalhar melhor o que você comeu (itens e quantidades).",
+    retake: false,
+    retryable: true,
+  },
+  food_diary_text_required: {
+    title: "Descrição necessária",
+    message: "Descreva o que você comeu para continuar.",
+    retake: false,
+    retryable: false,
+  },
+
   /* Foto inválida no upload */
   food_diary_photo_too_large: {
     title: "Foto muito grande",

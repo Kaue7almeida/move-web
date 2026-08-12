@@ -116,7 +116,7 @@ alter table public.food_diary_plans enable row level security;
 --  • edição em dia posterior  → arquiva a versão ativa (superseded_at = now) e
 --                               insere uma NOVA versão ativa (effective_from = hoje).
 -- FOR UPDATE serializa trocas concorrentes do mesmo usuário. search_path explícito.
-create function public.food_diary_upsert_plan(
+create or replace function public.food_diary_upsert_plan(
   p_user_id uuid,
   p_today date,
   p_goal text,

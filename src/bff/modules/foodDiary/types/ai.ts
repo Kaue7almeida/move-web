@@ -14,6 +14,18 @@ export type FoodDiaryAiInput = {
   userNotes: string | null;
 };
 
+/** Input for a TEXT-described meal (or snack) — no photo. Same output contract. */
+export type FoodDiaryTextInput = {
+  mealType: string;
+  /** Free-text description, e.g. "2 pães de queijo e café com leite". */
+  description: string;
+  containerSize: string | null;
+  /** Optional hint (may carry the user's own kcal estimate). */
+  userNotes: string | null;
+  /** True for the "docinho ou petisco" flow (small intake). */
+  isSnack: boolean;
+};
+
 /* ─── AI response contract (Structured Outputs → validated again with Zod) ───── */
 
 const aiItemSchema = z.object({

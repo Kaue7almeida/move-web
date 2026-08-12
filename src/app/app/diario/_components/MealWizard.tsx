@@ -725,6 +725,11 @@ export function MealWizard({
                             {nameById[item.id] ?? item.name}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {item.preparation && (
+                              <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                                {item.preparation}
+                              </span>
+                            )}
                             {item.category && (
                               <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 {item.category}

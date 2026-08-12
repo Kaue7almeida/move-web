@@ -6,7 +6,13 @@ import {
   resolvePlanInputs,
   selectPlanVersionForDay,
 } from "@/bff/modules/foodDiary/planBuild";
-import { estimateTmbFromBodyFat, estimateTmbFromLeanMass } from "@/bff/modules/foodDiary/planEnergy";
+import {
+  asRoutineLevel,
+  classifyConsumption,
+  computeEnergyPlan,
+  estimateTmbFromBodyFat,
+  estimateTmbFromLeanMass,
+} from "@/bff/modules/foodDiary/planEnergy";
 import type { LatestScanTmb, UpsertPlanInput } from "@/bff/modules/foodDiary/types/plan";
 
 function base(overrides: Partial<UpsertPlanInput> = {}): UpsertPlanInput {
@@ -131,4 +137,30 @@ test("plan versioning: the version effective on each day is selected (old plan p
   assert.equal(selectPlanVersionForDay(plans, "2026-08-10")?.goal, "lose");
   // Before any plan existed → null (history marks the day "incomplete").
   assert.equal(selectPlanVersionForDay(plans, "2026-08-01"), null);
+});
+
+test("History classifies a past day with the SAME engine as Today", () => {
+  // A single plan version; a historical day picks it and runs planEnergy.
+  const plans = [
+    { effective_from: "2026-08-05", tmb_kcal: 1700, routine_level: "light", planned_balance_kcal: -400, tolerance_kcal: 150 },
+  ];
+  const plan = selectPlanVersionForDay(plans, "2026-08-06");
+  assert.ok(plan);
+  if (!plan) {
+    return;
+  }
+
+  const energy = computeEnergyPlan({
+    tmbKcal: plan.tmb_kcal,
+    routineLevel: asRoutineLevel(plan.routine_level),
+    activitiesKcal: 0,
+    plannedBalanceKcal: plan.planned_balance_kcal,
+    toleranceKcal: plan.tolerance_kcal,
+  });
+  // gastoBase = 1700*1.3 = 2210; alvo = 2210-400 = 1810; band = [1660, 1960].
+  assert.equal(energy.bandLowKcal, 1660);
+  assert.equal(energy.bandHighKcal, 1960);
+  assert.equal(classifyConsumption(1500, energy), "below");
+  assert.equal(classifyConsumption(1800, energy), "within");
+  assert.equal(classifyConsumption(2100, energy), "above");
 });

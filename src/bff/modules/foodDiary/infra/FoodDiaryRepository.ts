@@ -77,6 +77,8 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
       status: "draft",
       meal_type: input.mealType,
       logged_at: input.loggedAt,
+      input_kind: input.inputKind,
+      text_description: input.textDescription,
       container_size: input.containerSize,
       meal_origin: input.mealOrigin,
       preparation_hint: input.preparationHint,

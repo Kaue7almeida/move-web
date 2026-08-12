@@ -3,7 +3,6 @@
 import { useState } from "react";
 import {
   Activity,
-  Camera,
   Check,
   ChevronDown,
   Flame,
@@ -35,6 +34,7 @@ import {
 } from "../_nutrition";
 import { BalanceRing, useCountUp } from "./BalanceRing";
 import { DayTrail, MealIcon } from "./bits";
+import { QuickRegister } from "./QuickRegister";
 
 type DiaryTodayProps = {
   today: FoodDiaryTodayResponse;
@@ -131,15 +131,8 @@ export function DiaryToday({ today, onStartMeal, onRefresh, hud = null }: DiaryT
         <DayTrail loggedMeals={loggedMeals} kcalByMeal={kcalByMeal} onPickMeal={onStartMeal} />
       </section>
 
-      {/* CTA principal */}
-      <button
-        type="button"
-        onClick={() => onStartMeal(suggestMealByHour())}
-        className="dia-rise flex w-full items-center justify-center gap-2.5 rounded-2xl bg-accent px-6 py-4 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-all hover:bg-accent-hover"
-      >
-        <Camera size={18} strokeWidth={2} />
-        Registrar refeição com foto
-      </button>
+      {/* CTA universal: + Registrar (foto / texto / docinho / atividade) */}
+      <QuickRegister onStartPhoto={() => onStartMeal(suggestMealByHour())} onSaved={onRefresh} />
 
       {/* Refeições do dia */}
       <MealsSection
