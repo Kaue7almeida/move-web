@@ -121,6 +121,11 @@ function TrainerHome() {
           />
         </div>
       </div>
+
+      {/* Diário Alimentar — bloco PESSOAL do usuário (não é sobre os alunos dele).
+          Beta-gated e role-agnostic: aparece para o trainer quando habilitado, e lê
+          o próprio dia via GET /api/v1/food-diary/today (auth.userId). */}
+      {me.foodDiaryEnabled ? <DiaryHomeCard /> : null}
     </div>
   );
 }

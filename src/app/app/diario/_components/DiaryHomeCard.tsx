@@ -10,7 +10,7 @@ import { getToday } from "@/services/foodDiary/foodDiaryService";
 import { BalanceRing } from "./BalanceRing";
 
 /**
- * Bloco do Diário Alimentar na Home do aluno — HERO secundário. Agora usa dados
+ * Bloco do Diário Alimentar na Home do usuário — HERO secundário. Agora usa dados
  * REAIS do dia (GET /api/v1/food-diary/today) com fuso local do cliente.
  *
  * Fallback seguro: enquanto carrega, ou se a chamada falhar, cai no convite neutro
