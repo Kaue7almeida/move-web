@@ -1,4 +1,5 @@
 import type { Database, Json } from "@/bff/core/supabase/database.types";
+import type { FoodDiaryHud, FoodDiaryPlanView } from "@/bff/modules/foodDiary/types/plan";
 
 /* ─── Persistence records (snake_case, from DB) ─────────────────────────────── */
 
@@ -200,6 +201,10 @@ export type FoodDiaryTodayResponse = {
   /** The diary day these data belong to (YYYY-MM-DD, server UTC unless overridden). */
   date: string;
   target: CalorieTargetView | null;
+  /** The user's active energy plan (Diário 2.0), or null when not configured yet. */
+  plan: FoodDiaryPlanView | null;
+  /** The daily HUD ("estou seguindo meu objetivo hoje?"), null without a plan. */
+  hud: FoodDiaryHud | null;
   /** Confirmed meals of the day (only confirmed entries feed the diary). */
   meals: FoodDiaryEntryView[];
   activities: ActivityEnergyView[];

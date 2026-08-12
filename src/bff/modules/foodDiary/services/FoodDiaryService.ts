@@ -8,6 +8,31 @@ import {
   localDayWindow,
   resolveTimeZone,
 } from "@/bff/modules/foodDiary/diaryDay";
+import {
+  asGoal,
+  asRoutineLevel,
+  asTmbSource,
+  classifyConsumption,
+  computeEnergyPlan,
+  estimateTmbFromLeanMass,
+  GOAL_LABELS,
+  kcalOverBandTop,
+  kcalToBandTop,
+  missionLabelFor,
+  ROUTINE_LEVEL_LABELS,
+  statusLabelFor,
+} from "@/bff/modules/foodDiary/planEnergy";
+import { resolvePlanInputs } from "@/bff/modules/foodDiary/planBuild";
+import type {
+  FoodDiaryHud,
+  FoodDiaryPlanRecord,
+  FoodDiaryPlanResponse,
+  FoodDiaryPlanView,
+  LatestScanTmb,
+  PlanTmbSnapshot,
+  TmbSuggestion,
+  UpsertPlanInput,
+} from "@/bff/modules/foodDiary/types/plan";
 import type { OpenAiFoodDiaryClient } from "@/bff/modules/foodDiary/infra/OpenAiFoodDiaryClient";
 import type { FoodDiaryAiResponse } from "@/bff/modules/foodDiary/types/ai";
 import type { CurrentUserIdentity } from "@/bff/modules/profile/types";
@@ -77,8 +102,9 @@ export class FoodDiaryService {
     const day = resolveLocalDay(options.date, timeZone);
     const { startIso, endIso } = localDayWindow(day, timeZone);
 
-    const [targetRecord, entries, activities] = await Promise.all([
+    const [targetRecord, planRecord, entries, activities] = await Promise.all([
       this.foodDiaryRepository.findCurrentTargetForDate(identity.userId, day),
+      this.foodDiaryRepository.findActivePlan(identity.userId),
       this.foodDiaryRepository.listConfirmedEntriesInRange(identity.userId, startIso, endIso),
       this.foodDiaryRepository.listActivitiesInRange(identity.userId, startIso, endIso),
     ]);
@@ -100,9 +126,14 @@ export class FoodDiaryService {
       ? roundKcal(target.targetKcal + burnedKcal - consumed.kcal)
       : null;
 
+    const plan = planRecord ? mapPlanToView(planRecord) : null;
+    const hud = planRecord ? buildHud(planRecord, consumed.kcal, burnedKcal) : null;
+
     return {
       date: day,
       target,
+      plan,
+      hud,
       meals,
       activities: activityViews,
       totals: {
@@ -114,6 +145,52 @@ export class FoodDiaryService {
         burnedKcal,
         remainingKcal,
       },
+    };
+  }
+
+  /* ─── Energy plan (Diário 2.0) ─── */
+
+  async getPlan(identity: CurrentUserIdentity): Promise<FoodDiaryPlanResponse> {
+    const [planRecord, latestScan] = await Promise.all([
+      this.foodDiaryRepository.findActivePlan(identity.userId),
+      this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId),
+    ]);
+
+    return {
+      plan: planRecord ? mapPlanToView(planRecord) : null,
+      tmbSuggestion: buildTmbSuggestion(latestScan, planRecord),
+    };
+  }
+
+  async upsertPlan(
+    identity: CurrentUserIdentity,
+    input: UpsertPlanInput,
+  ): Promise<FoodDiaryPlanResponse> {
+    // Scan-sourced TMB is read server-side (client numbers are never trusted).
+    const scan =
+      input.tmbSource === "scan"
+        ? await this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId)
+        : null;
+
+    const resolved = resolvePlanInputs(input, scan);
+
+    if (!resolved.ok) {
+      throw new ApiError(422, resolved.code, resolved.message);
+    }
+
+    const existing = await this.foodDiaryRepository.findActivePlan(identity.userId);
+    const dbInput = { userId: identity.userId, goal: input.goal, ...resolved.value };
+
+    const saved = existing
+      ? await this.foodDiaryRepository.updateActivePlan({ ...dbInput, planId: existing.id })
+      : await this.foodDiaryRepository.insertActivePlan(dbInput);
+
+    const latestScan =
+      scan ?? (await this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId));
+
+    return {
+      plan: mapPlanToView(saved),
+      tmbSuggestion: buildTmbSuggestion(latestScan, saved),
     };
   }
 
@@ -959,4 +1036,112 @@ function mapActivityToView(record: ActivityEnergyEntryRecord): ActivityEnergyVie
     loggedAt: record.logged_at,
     workoutSessionId: record.workout_session_id,
   };
+}
+
+/* ─── Energy plan (Diário 2.0) mappers ─── */
+
+function mapPlanToView(record: FoodDiaryPlanRecord): FoodDiaryPlanView {
+  const goal = asGoal(record.goal);
+  const routineLevel = asRoutineLevel(record.routine_level);
+
+  return {
+    id: record.id,
+    status: record.status,
+    goal,
+    goalLabel: GOAL_LABELS[goal],
+    tmbKcal: toNumber(record.tmb_kcal),
+    tmbSource: asTmbSource(record.tmb_source),
+    tmbSnapshot: parseSnapshot(record.tmb_input),
+    scanId: record.scan_id,
+    routineLevel,
+    routineLabel: ROUTINE_LEVEL_LABELS[routineLevel],
+    routineFactor: toNumber(record.routine_factor),
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    toleranceKcal: toNumber(record.tolerance_kcal),
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+  };
+}
+
+function buildHud(record: FoodDiaryPlanRecord, consumedKcal: number, burnedKcal: number): FoodDiaryHud {
+  const goal = asGoal(record.goal);
+  const energy = computeEnergyPlan({
+    tmbKcal: toNumber(record.tmb_kcal),
+    routineLevel: asRoutineLevel(record.routine_level),
+    activitiesKcal: burnedKcal,
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    toleranceKcal: toNumber(record.tolerance_kcal),
+  });
+  const status = classifyConsumption(consumedKcal, energy);
+
+  return {
+    goal,
+    goalLabel: GOAL_LABELS[goal],
+    missionLabel: missionLabelFor(goal),
+    status,
+    statusLabel: statusLabelFor(status),
+    tmbKcal: energy.tmbKcal,
+    routineFactor: energy.routineFactor,
+    gastoBaseKcal: energy.gastoBaseKcal,
+    gastoDiaKcal: energy.gastoDiaKcal,
+    alvoCentralKcal: energy.alvoCentralKcal,
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    bandLowKcal: energy.bandLowKcal,
+    bandHighKcal: energy.bandHighKcal,
+    consumedKcal: roundKcal(consumedKcal),
+    burnedKcal: roundKcal(burnedKcal),
+    kcalToBandTop: kcalToBandTop(consumedKcal, energy),
+    kcalOverBandTop: kcalOverBandTop(consumedKcal, energy),
+  };
+}
+
+function buildTmbSuggestion(
+  scan: LatestScanTmb | null,
+  plan: FoodDiaryPlanRecord | null,
+): TmbSuggestion {
+  if (!scan) {
+    return {
+      hasScan: false,
+      scanId: null,
+      scanCreatedAt: null,
+      tmbKcal: null,
+      leanMassKg: null,
+      bodyFatPercent: null,
+      weightKg: null,
+      hasNewerScanThanPlan: false,
+    };
+  }
+
+  const tmbKcal =
+    scan.leanMassKg && scan.leanMassKg > 0 ? estimateTmbFromLeanMass(scan.leanMassKg) : scan.bmr;
+  const hasNewerScanThanPlan =
+    plan !== null && plan.scan_id !== scan.id && scan.createdAt > plan.created_at;
+
+  return {
+    hasScan: true,
+    scanId: scan.id,
+    scanCreatedAt: scan.createdAt,
+    tmbKcal,
+    leanMassKg: scan.leanMassKg,
+    bodyFatPercent: scan.bodyFatPercent,
+    weightKg: scan.weightKg,
+    hasNewerScanThanPlan,
+  };
+}
+
+function parseSnapshot(value: Json): PlanTmbSnapshot {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, Json>;
+    return {
+      leanMassKg: numberOrNull(record.leanMassKg),
+      bodyFatPercent: numberOrNull(record.bodyFatPercent),
+      weightKg: numberOrNull(record.weightKg),
+    };
+  }
+
+  return { leanMassKg: null, bodyFatPercent: null, weightKg: null };
+}
+
+function numberOrNull(value: Json | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

@@ -295,6 +295,8 @@ type FoodDiaryEntriesRow = {
   hidden_ingredients: Json;
   is_shared_portion: boolean;
   user_notes: string | null;
+  input_kind: string;
+  text_description: string | null;
   idempotency_key: string | null;
   ai_result: Json;
   ai_model: string | null;
@@ -315,6 +317,23 @@ type FoodDiaryEntriesRow = {
   processing_started_at: string | null;
   analyzed_at: string | null;
   confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FoodDiaryPlansRow = {
+  id: string;
+  user_id: string;
+  status: string;
+  goal: string;
+  tmb_kcal: number;
+  tmb_source: string;
+  tmb_input: Json;
+  scan_id: string | null;
+  routine_level: string;
+  routine_factor: number;
+  planned_balance_kcal: number;
+  tolerance_kcal: number;
   created_at: string;
   updated_at: string;
 };
@@ -943,6 +962,8 @@ export type Database = {
           hidden_ingredients?: Json;
           is_shared_portion?: boolean;
           user_notes?: string | null;
+          input_kind?: string;
+          text_description?: string | null;
           idempotency_key?: string | null;
           ai_result?: Json;
           ai_model?: string | null;
@@ -972,6 +993,8 @@ export type Database = {
           status?: string;
           meal_type?: string;
           logged_at?: string;
+          input_kind?: string;
+          text_description?: string | null;
           photo_storage_path?: string | null;
           photo_content_type?: string | null;
           container_size?: string | null;
@@ -1105,6 +1128,41 @@ export type Database = {
           label?: string | null;
           kcal_burned?: number;
           logged_at?: string;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
+      food_diary_plans: TableDefinition<
+        FoodDiaryPlansRow,
+        {
+          id?: string;
+          user_id: string;
+          status?: string;
+          goal: string;
+          tmb_kcal: number;
+          tmb_source: string;
+          tmb_input?: Json;
+          scan_id?: string | null;
+          routine_level: string;
+          routine_factor: number;
+          planned_balance_kcal?: number;
+          tolerance_kcal: number;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          user_id?: string;
+          status?: string;
+          goal?: string;
+          tmb_kcal?: number;
+          tmb_source?: string;
+          tmb_input?: Json;
+          scan_id?: string | null;
+          routine_level?: string;
+          routine_factor?: number;
+          planned_balance_kcal?: number;
+          tolerance_kcal?: number;
           created_at?: string;
           updated_at?: string;
         }

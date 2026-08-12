@@ -5,6 +5,12 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryItemRecord,
 } from "@/bff/modules/foodDiary/types";
+import type {
+  FoodDiaryPlanRecord,
+  InsertPlanDbInput,
+  LatestScanTmb,
+  UpdatePlanDbInput,
+} from "@/bff/modules/foodDiary/types/plan";
 
 export type CreateEntryDraftDbInput = {
   studentUserId: string;
@@ -172,6 +178,14 @@ export interface IFoodDiaryRepository {
     startIso: string,
     endIso: string,
   ): Promise<ActivityEnergyEntryRecord[]>;
+
+  // ── food_diary_plans ──
+  /** The user's single active plan, or null (ownership by profiles.id = userId). */
+  findActivePlan(userId: string): Promise<FoodDiaryPlanRecord | null>;
+  insertActivePlan(input: InsertPlanDbInput): Promise<FoodDiaryPlanRecord>;
+  updateActivePlan(input: UpdatePlanDbInput): Promise<FoodDiaryPlanRecord>;
+  /** Latest completed MoveScan for the user (for the TMB suggestion), or null. */
+  findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null>;
 
   // ── storage: food-diary-photos (private bucket) ──
   uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void>;

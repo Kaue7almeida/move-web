@@ -19,6 +19,12 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryItemRecord,
 } from "@/bff/modules/foodDiary/types";
+import type {
+  FoodDiaryPlanRecord,
+  InsertPlanDbInput,
+  LatestScanTmb,
+  UpdatePlanDbInput,
+} from "@/bff/modules/foodDiary/types/plan";
 
 const FOOD_DIARY_PHOTOS_BUCKET = "food-diary-photos";
 
@@ -535,6 +541,106 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     }
 
     return data ?? [];
+  }
+
+  /* ─── food_diary_plans ─── */
+
+  async findActivePlan(userId: string): Promise<FoodDiaryPlanRecord | null> {
+    const { data, error } = await this.supabase
+      .from("food_diary_plans")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async insertActivePlan(input: InsertPlanDbInput): Promise<FoodDiaryPlanRecord> {
+    const { data, error } = await this.supabase
+      .from("food_diary_plans")
+      .insert({
+        user_id: input.userId,
+        status: "active",
+        goal: input.goal,
+        tmb_kcal: input.tmbKcal,
+        tmb_source: input.tmbSource,
+        tmb_input: input.tmbInput as unknown as Database["public"]["Tables"]["food_diary_plans"]["Insert"]["tmb_input"],
+        scan_id: input.scanId,
+        routine_level: input.routineLevel,
+        routine_factor: input.routineFactor,
+        planned_balance_kcal: input.plannedBalanceKcal,
+        tolerance_kcal: input.toleranceKcal,
+      })
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async updateActivePlan(input: UpdatePlanDbInput): Promise<FoodDiaryPlanRecord> {
+    const { data, error } = await this.supabase
+      .from("food_diary_plans")
+      .update({
+        goal: input.goal,
+        tmb_kcal: input.tmbKcal,
+        tmb_source: input.tmbSource,
+        tmb_input: input.tmbInput as unknown as Database["public"]["Tables"]["food_diary_plans"]["Update"]["tmb_input"],
+        scan_id: input.scanId,
+        routine_level: input.routineLevel,
+        routine_factor: input.routineFactor,
+        planned_balance_kcal: input.plannedBalanceKcal,
+        tolerance_kcal: input.toleranceKcal,
+      })
+      .eq("id", input.planId)
+      .eq("user_id", input.userId)
+      .eq("status", "active")
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null> {
+    const { data, error } = await this.supabase
+      .from("scan_analyses")
+      .select("id, lean_mass_kg, bmr, body_fat_percent, weight_kg, created_at")
+      .eq("student_user_id", userId)
+      .eq("status", "completed")
+      .order("processed_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      leanMassKg: data.lean_mass_kg,
+      bmr: data.bmr,
+      bodyFatPercent: data.body_fat_percent,
+      weightKg: data.weight_kg,
+      createdAt: data.created_at,
+    };
   }
 
   /* ─── storage: food-diary-photos (private bucket) ─── */
