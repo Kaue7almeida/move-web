@@ -265,7 +265,7 @@ export function MealWizard({
       }
 
       // 3. Análise real (pode levar alguns segundos). Marca "processing" ANTES do
-      // await: se o aluno abandonar durante a análise, a limpeza NÃO apaga o
+      // await: se o usuário abandonar durante a análise, a limpeza NÃO apaga o
       // registro em processamento (evita corrida com o processamento no servidor).
       statusRef.current = "processing";
       const analyzed = await analyzeEntry(id);

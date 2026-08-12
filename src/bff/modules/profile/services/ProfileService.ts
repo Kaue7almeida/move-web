@@ -1,5 +1,5 @@
 import { isAdminEmail } from "@/bff/core/auth/adminAccess";
-import { isFoodDiaryBetaEmail } from "@/bff/core/auth/foodDiaryBetaAccess";
+import { isFoodDiaryEnabledForUser } from "@/bff/core/auth/foodDiaryBetaAccess";
 import { ApiError } from "@/bff/core/errors/ApiError";
 import type { IProfileRepository } from "@/bff/modules/profile/types/IProfileRepository";
 import type {
@@ -828,7 +828,10 @@ export class ProfileService {
       isStudent,
       isTrainer,
       isAdmin: isAdminEmail(identity.email) && isTrainer,
-      foodDiaryEnabled: isFoodDiaryBetaEmail(identity.email) && isStudent,
+      // The Food Diary is a personal feature of the Move user — it does NOT depend
+      // on role (student/trainer/admin). The only beta boundary is the e-mail
+      // allowlist (fail-closed). Ownership is always the authenticated user.
+      foodDiaryEnabled: isFoodDiaryEnabledForUser(identity.email),
       primaryRole,
       studentOnboardingCompleted,
       trainerOnboardingCompleted,

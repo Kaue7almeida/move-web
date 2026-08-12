@@ -28,3 +28,17 @@ export function isFoodDiaryBetaEmail(email: string | null | undefined): boolean 
 
   return parseBetaEmails(process.env.FOOD_DIARY_BETA_EMAILS).has(normalizedEmail);
 }
+
+/**
+ * Whether the Food Diary is enabled for a Move user. The Diary is a PERSONAL
+ * feature and is role-agnostic — it works for students, trainers and admins
+ * alike. The only boundary is the beta allowlist (fail-closed).
+ *
+ * This function intentionally takes NO role argument, so the decision can never
+ * regress to being student-only: role is not part of the contract. Ownership of
+ * diary data is always the authenticated user (public.profiles.id), enforced by
+ * ensureFoodDiaryAccess and the per-user query filters — not by this flag.
+ */
+export function isFoodDiaryEnabledForUser(email: string | null | undefined): boolean {
+  return isFoodDiaryBetaEmail(email);
+}

@@ -230,11 +230,20 @@ export function buildNavigation(
     ? [{ href: "/app/admin", label: "Admin" }]
     : [];
 
+  // Food Diary is a personal, role-agnostic feature, beta-gated by
+  // FOOD_DIARY_BETA_EMAILS. Hidden from the nav until enabled server-side; the
+  // real access boundary is the API guard. Any role (student OR trainer) in the
+  // allowlist gets the item.
+  const foodDiaryItems: AppNavigationItem[] = foodDiaryEnabled
+    ? [{ href: "/app/diario", label: "Diário" }]
+    : [];
+
   if (primaryRole === "trainer") {
     return [
       { href: "/app", label: "Início" },
       { href: "/app/alunos", label: "Alunos" },
       { href: "/app/treinos", label: "Treinos" },
+      ...foodDiaryItems,
       { href: "/app/chat", label: "Chat Move" },
       { href: "/app/galeria", label: "Galeria" },
       { href: "/app/acompanhamento", label: "Acompanhamento" },
@@ -242,12 +251,6 @@ export function buildNavigation(
       ...adminItems,
     ];
   }
-
-  // Food Diary is beta-gated (FOOD_DIARY_BETA_EMAILS). Hidden from the nav until
-  // the flag is enabled server-side; the real access boundary is the API guard.
-  const foodDiaryItems: AppNavigationItem[] = foodDiaryEnabled
-    ? [{ href: "/app/diario", label: "Diário" }]
-    : [];
 
   return [
     { href: "/app", label: "Início" },

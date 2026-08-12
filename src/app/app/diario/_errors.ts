@@ -109,7 +109,7 @@ export function describeFoodDiaryError(error: unknown): FoodDiaryErrorInfo {
     }
 
     // openai_api_key_missing e quaisquer 5xx desconhecidos: mensagem genérica,
-    // sem vazar a causa real (config/infra) para o aluno.
+    // sem vazar a causa real (config/infra) para o usuário.
     if (error.status >= 500) {
       return { ...GENERIC, message: "O serviço está indisponível no momento. Tente novamente em breve." };
     }

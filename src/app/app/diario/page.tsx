@@ -33,7 +33,7 @@ type HistoryState =
 /**
  * Diário Alimentar — experiência integrada, agora com DADOS REAIS.
  *
- * Vive dentro do AppShell autenticado do aluno. "Hoje" e "Histórico" são abas de
+ * Vive dentro do AppShell autenticado do usuário. "Hoje" e "Histórico" são abas de
  * estado (sem rotas separadas). O registro de refeição é um fluxo em página (não
  * modal): quando ativo, substitui o conteúdo da aba mantendo a navegação visível.
  *
@@ -126,14 +126,15 @@ export default function DiaryPage() {
     void loadHistory();
   }, [loadHistory]);
 
-  // Beta gate: o Diário só é acessível para alunos com a feature habilitada
-  // (FOOD_DIARY_BETA_EMAILS). A fronteira de segurança real é o guard da API;
-  // isto apenas bloqueia a página visual para as demais contas.
+  // Beta gate: o Diário é uma feature pessoal, disponível para qualquer papel
+  // (aluno ou personal) cujo e-mail esteja na allowlist (FOOD_DIARY_BETA_EMAILS).
+  // A fronteira de segurança real é o guard da API; isto apenas bloqueia a página
+  // visual para as demais contas.
   if (!enabled) {
     return (
       <RoleGuard
         title="Diário Alimentar"
-        description="O Diário Alimentar faz parte do espaço do aluno no Move."
+        description="O Diário Alimentar ainda está em teste fechado (beta) e não está disponível no seu acesso."
       />
     );
   }
