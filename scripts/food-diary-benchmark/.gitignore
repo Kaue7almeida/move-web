@@ -1,0 +1,5 @@
+# Local benchmark artifacts — never commit food photos, filled cases or results.
+cases.csv
+results.csv
+*-images/
+benchmark-images/
