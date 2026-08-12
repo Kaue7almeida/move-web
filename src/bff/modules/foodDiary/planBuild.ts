@@ -76,7 +76,10 @@ export function resolvePlanInputs(
     };
   }
 
-  const plannedBalanceKcal = clampBalance(input.plannedBalanceKcal ?? suggestedPlannedBalance(input.goal));
+  const plannedBalanceKcal = coerceBalanceToGoal(
+    input.goal,
+    clampBalance(input.plannedBalanceKcal ?? suggestedPlannedBalance(input.goal)),
+  );
   const baseAlvo = Math.round(tmbKcal * routineFactor) + plannedBalanceKcal;
   const toleranceKcal = clampTolerance(input.toleranceKcal ?? suggestedToleranceKcal(baseAlvo));
 
@@ -93,6 +96,34 @@ export function resolvePlanInputs(
       toleranceKcal,
     },
   };
+}
+
+/**
+ * Enforces the goal invariant so a saved plan can never contradict its objective
+ * (and never persists a state the DB CHECK would reject):
+ *   lose → balance ≤ 0 · maintain → balance = 0 · gain → balance ≥ 0.
+ */
+export function coerceBalanceToGoal(goal: string, balance: number): number {
+  if (goal === "maintain") {
+    return 0;
+  }
+  if (goal === "lose") {
+    return Math.min(balance, 0);
+  }
+  return Math.max(balance, 0);
+}
+
+/**
+ * Selects the plan version in force on a given local day: the version with the
+ * greatest effective_from ≤ day. Expects the versions ordered effective_from desc
+ * (active + archived). Returns null when no version had started yet (→ history
+ * marks the day "incomplete"). Pure — used by History and unit-tested.
+ */
+export function selectPlanVersionForDay<T extends { effective_from: string }>(
+  plansDesc: readonly T[],
+  day: string,
+): T | null {
+  return plansDesc.find((plan) => plan.effective_from <= day) ?? null;
 }
 
 export function clampBalance(value: number): number {

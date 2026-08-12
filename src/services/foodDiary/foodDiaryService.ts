@@ -123,7 +123,7 @@ export async function upsertPlan(input: UpsertPlanInput): Promise<FoodDiaryPlanR
   const response = await authenticatedFetch("/api/v1/food-diary/plan", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ timeZone: clientTimeZone(), ...input }),
   });
 
   if (!response.ok) {

@@ -160,7 +160,8 @@ export default function DiaryPage() {
     );
   }
 
-  const hasTarget = todayState.status === "ready" && todayState.today.target !== null;
+  // Histórico depende do PLANO 2.0 (não da meta legada).
+  const hasPlan = todayState.status === "ready" && todayState.today.plan !== null;
 
   return (
     <div className="space-y-6">
@@ -191,13 +192,13 @@ export default function DiaryPage() {
           type="button"
           role="tab"
           aria-selected={view === "historico"}
-          disabled={!hasTarget}
+          disabled={!hasPlan}
           onClick={openHistory}
-          title={hasTarget ? undefined : "Defina sua meta para liberar o histórico"}
+          title={hasPlan ? undefined : "Defina seu plano para liberar o histórico"}
           className={[
             "flex-1 rounded-lg px-4 py-2 transition-colors",
             view === "historico" ? "bg-accent text-accent-on" : "text-muted hover:text-foreground",
-            hasTarget ? "" : "cursor-not-allowed opacity-40",
+            hasPlan ? "" : "cursor-not-allowed opacity-40",
           ].join(" ")}
         >
           Histórico

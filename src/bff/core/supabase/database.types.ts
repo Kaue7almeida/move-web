@@ -325,6 +325,8 @@ type FoodDiaryPlansRow = {
   id: string;
   user_id: string;
   status: string;
+  effective_from: string;
+  superseded_at: string | null;
   goal: string;
   tmb_kcal: number;
   tmb_source: string;
@@ -1144,6 +1146,8 @@ export type Database = {
           id?: string;
           user_id: string;
           status?: string;
+          effective_from: string;
+          superseded_at?: string | null;
           goal: string;
           tmb_kcal: number;
           tmb_source: string;
@@ -1160,6 +1164,8 @@ export type Database = {
           id?: string;
           user_id?: string;
           status?: string;
+          effective_from?: string;
+          superseded_at?: string | null;
           goal?: string;
           tmb_kcal?: number;
           tmb_source?: string;
@@ -1175,7 +1181,24 @@ export type Database = {
       >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      food_diary_upsert_plan: {
+        Args: {
+          p_user_id: string;
+          p_today: string;
+          p_goal: string;
+          p_tmb_kcal: number;
+          p_tmb_source: string;
+          p_tmb_input: Json;
+          p_scan_id: string | null;
+          p_routine_level: string;
+          p_routine_factor: number;
+          p_planned_balance_kcal: number;
+          p_tolerance_kcal: number;
+        };
+        Returns: FoodDiaryPlansRow;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

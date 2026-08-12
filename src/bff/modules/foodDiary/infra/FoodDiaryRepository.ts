@@ -21,9 +21,8 @@ import type {
 } from "@/bff/modules/foodDiary/types";
 import type {
   FoodDiaryPlanRecord,
-  InsertPlanDbInput,
   LatestScanTmb,
-  UpdatePlanDbInput,
+  UpsertPlanDbInput,
 } from "@/bff/modules/foodDiary/types/plan";
 
 const FOOD_DIARY_PHOTOS_BUCKET = "food-diary-photos";
@@ -563,24 +562,21 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     return data;
   }
 
-  async insertActivePlan(input: InsertPlanDbInput): Promise<FoodDiaryPlanRecord> {
-    const { data, error } = await this.supabase
-      .from("food_diary_plans")
-      .insert({
-        user_id: input.userId,
-        status: "active",
-        goal: input.goal,
-        tmb_kcal: input.tmbKcal,
-        tmb_source: input.tmbSource,
-        tmb_input: input.tmbInput as unknown as Database["public"]["Tables"]["food_diary_plans"]["Insert"]["tmb_input"],
-        scan_id: input.scanId,
-        routine_level: input.routineLevel,
-        routine_factor: input.routineFactor,
-        planned_balance_kcal: input.plannedBalanceKcal,
-        tolerance_kcal: input.toleranceKcal,
-      })
-      .select("*")
-      .single();
+  async upsertPlanVersioned(input: UpsertPlanDbInput): Promise<FoodDiaryPlanRecord> {
+    // Atomic (RPC): archive+insert on a later-day change, update-in-place same day.
+    const { data, error } = await this.supabase.rpc("food_diary_upsert_plan", {
+      p_user_id: input.userId,
+      p_today: input.today,
+      p_goal: input.goal,
+      p_tmb_kcal: input.tmbKcal,
+      p_tmb_source: input.tmbSource,
+      p_tmb_input: input.tmbInput as unknown as Database["public"]["Functions"]["food_diary_upsert_plan"]["Args"]["p_tmb_input"],
+      p_scan_id: input.scanId,
+      p_routine_level: input.routineLevel,
+      p_routine_factor: input.routineFactor,
+      p_planned_balance_kcal: input.plannedBalanceKcal,
+      p_tolerance_kcal: input.toleranceKcal,
+    });
 
     if (error || !data) {
       throw DB_QUERY_FAILED;
@@ -589,31 +585,23 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     return data;
   }
 
-  async updateActivePlan(input: UpdatePlanDbInput): Promise<FoodDiaryPlanRecord> {
+  async listPlansEffectiveUpTo(
+    userId: string,
+    dateString: string,
+  ): Promise<FoodDiaryPlanRecord[]> {
     const { data, error } = await this.supabase
       .from("food_diary_plans")
-      .update({
-        goal: input.goal,
-        tmb_kcal: input.tmbKcal,
-        tmb_source: input.tmbSource,
-        tmb_input: input.tmbInput as unknown as Database["public"]["Tables"]["food_diary_plans"]["Update"]["tmb_input"],
-        scan_id: input.scanId,
-        routine_level: input.routineLevel,
-        routine_factor: input.routineFactor,
-        planned_balance_kcal: input.plannedBalanceKcal,
-        tolerance_kcal: input.toleranceKcal,
-      })
-      .eq("id", input.planId)
-      .eq("user_id", input.userId)
-      .eq("status", "active")
       .select("*")
-      .single();
+      .eq("user_id", userId)
+      .lte("effective_from", dateString)
+      .order("effective_from", { ascending: false })
+      .order("created_at", { ascending: false });
 
-    if (error || !data) {
+    if (error) {
       throw DB_QUERY_FAILED;
     }
 
-    return data;
+    return data ?? [];
   }
 
   async findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null> {

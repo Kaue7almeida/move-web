@@ -215,13 +215,27 @@ export type FoodDiaryTodayResponse = {
   totals: DayTotals;
 };
 
+/** below/within/above the band; "incomplete" when no plan version covered the day. */
+export type FoodDiaryHistoryStatus = "below" | "within" | "above" | "incomplete";
+
+/**
+ * History 2.0 — same energy engine as Today, driven by the plan version that was
+ * effective on each day (not the legacy daily_calorie_targets). No "déficit"
+ * framing: a day is classified vs. its own target band.
+ */
 export type FoodDiaryHistoryDay = {
   date: string;
   consumedKcal: number;
+  consumedProteinG: number;
   burnedKcal: number;
-  targetKcal: number | null;
-  /** consumed − (target + burned), or null when no target is in force. */
-  balanceKcal: number | null;
+  status: FoodDiaryHistoryStatus;
+  /** The plan goal in force that day, or null when there was no plan. */
+  goal: string | null;
+  gastoDiaKcal: number | null;
+  alvoCentralKcal: number | null;
+  bandLowKcal: number | null;
+  bandHighKcal: number | null;
+  plannedBalanceKcal: number | null;
 };
 
 export type FoodDiaryHistoryResponse = {

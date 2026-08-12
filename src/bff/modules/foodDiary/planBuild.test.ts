@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { resolvePlanInputs } from "@/bff/modules/foodDiary/planBuild";
+import {
+  coerceBalanceToGoal,
+  resolvePlanInputs,
+  selectPlanVersionForDay,
+} from "@/bff/modules/foodDiary/planBuild";
 import { estimateTmbFromBodyFat, estimateTmbFromLeanMass } from "@/bff/modules/foodDiary/planEnergy";
 import type { LatestScanTmb, UpsertPlanInput } from "@/bff/modules/foodDiary/types/plan";
 
@@ -83,11 +87,48 @@ test("invalid TMB (0 / absurd) is rejected", () => {
   assert.equal(resolvePlanInputs(base({ tmbSource: "manual", tmbKcal: 50000 }), null).ok, false);
 });
 
-test("explicit planned balance and tolerance are honored (clamped)", () => {
-  const r = resolvePlanInputs(base({ plannedBalanceKcal: -250, toleranceKcal: 200 }), null);
+test("explicit planned balance and tolerance are honored (goal-compatible)", () => {
+  const r = resolvePlanInputs(base({ goal: "lose", plannedBalanceKcal: -250, toleranceKcal: 200 }), null);
   assert.ok(r.ok);
   if (r.ok) {
     assert.equal(r.value.plannedBalanceKcal, -250);
     assert.equal(r.value.toleranceKcal, 200);
   }
+});
+
+test("goal invariant: contradictory balance is coerced, never persisted as-is", () => {
+  assert.equal(coerceBalanceToGoal("lose", 200), 0); // lose can't be a surplus
+  assert.equal(coerceBalanceToGoal("lose", -300), -300);
+  assert.equal(coerceBalanceToGoal("maintain", 150), 0); // maintain must be exactly 0
+  assert.equal(coerceBalanceToGoal("maintain", -150), 0);
+  assert.equal(coerceBalanceToGoal("gain", -200), 0); // gain can't be a deficit
+  assert.equal(coerceBalanceToGoal("gain", 300), 300);
+});
+
+test("resolvePlanInputs applies the goal invariant end-to-end", () => {
+  // lose with an explicit surplus → coerced to a deficit-or-zero.
+  const r = resolvePlanInputs(base({ goal: "lose", plannedBalanceKcal: 500 }), null);
+  assert.ok(r.ok);
+  if (r.ok) {
+    assert.ok(r.value.plannedBalanceKcal <= 0);
+  }
+
+  const m = resolvePlanInputs(base({ goal: "maintain", plannedBalanceKcal: -400 }), null);
+  assert.ok(m.ok && m.value.plannedBalanceKcal === 0);
+});
+
+test("plan versioning: the version effective on each day is selected (old plan preserved)", () => {
+  // Two versions, ordered effective_from desc (as the repo returns them).
+  const plans = [
+    { effective_from: "2026-08-10", goal: "lose" },
+    { effective_from: "2026-08-05", goal: "gain" },
+  ];
+
+  // A day under the OLD version still uses the old plan (history preserved).
+  assert.equal(selectPlanVersionForDay(plans, "2026-08-07")?.goal, "gain");
+  // A day under the NEW version uses the new plan.
+  assert.equal(selectPlanVersionForDay(plans, "2026-08-11")?.goal, "lose");
+  assert.equal(selectPlanVersionForDay(plans, "2026-08-10")?.goal, "lose");
+  // Before any plan existed → null (history marks the day "incomplete").
+  assert.equal(selectPlanVersionForDay(plans, "2026-08-01"), null);
 });

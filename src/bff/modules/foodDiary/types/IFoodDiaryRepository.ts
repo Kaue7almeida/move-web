@@ -7,9 +7,8 @@ import type {
 } from "@/bff/modules/foodDiary/types";
 import type {
   FoodDiaryPlanRecord,
-  InsertPlanDbInput,
   LatestScanTmb,
-  UpdatePlanDbInput,
+  UpsertPlanDbInput,
 } from "@/bff/modules/foodDiary/types/plan";
 
 export type CreateEntryDraftDbInput = {
@@ -181,11 +180,19 @@ export interface IFoodDiaryRepository {
     endIso: string,
   ): Promise<ActivityEnergyEntryRecord[]>;
 
-  // ── food_diary_plans ──
-  /** The user's single active plan, or null (ownership by profiles.id = userId). */
+  // ── food_diary_plans (versioned) ──
+  /** The user's single ACTIVE plan version, or null (ownership by profiles.id). */
   findActivePlan(userId: string): Promise<FoodDiaryPlanRecord | null>;
-  insertActivePlan(input: InsertPlanDbInput): Promise<FoodDiaryPlanRecord>;
-  updateActivePlan(input: UpdatePlanDbInput): Promise<FoodDiaryPlanRecord>;
+  /**
+   * Atomic versioned upsert (RPC): first plan → insert; same-day edit → update
+   * in place; later-day edit → archive current + insert new active version.
+   */
+  upsertPlanVersioned(input: UpsertPlanDbInput): Promise<FoodDiaryPlanRecord>;
+  /**
+   * All plan versions (active + archived) with effective_from <= dateString,
+   * ordered effective_from desc — so History can pick the version valid per day.
+   */
+  listPlansEffectiveUpTo(userId: string, dateString: string): Promise<FoodDiaryPlanRecord[]>;
   /** Latest completed MoveScan for the user (for the TMB suggestion), or null. */
   findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null>;
 

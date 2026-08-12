@@ -36,6 +36,8 @@ export type UpsertPlanInput = {
   plannedBalanceKcal?: number;
   /** Band half-width. Defaults to a suggestion derived from the target. */
   toleranceKcal?: number;
+  /** IANA time zone used to resolve the version's effective_from (local day). */
+  timeZone?: string;
 };
 
 /* ─── API views (camelCase) ─────────────────────────────────────────────────── */
@@ -43,6 +45,8 @@ export type UpsertPlanInput = {
 export type FoodDiaryPlanView = {
   id: string;
   status: string;
+  /** Local calendar day (YYYY-MM-DD) this plan version started applying. */
+  effectiveFrom: string;
   goal: GoalKind;
   goalLabel: string;
   tmbKcal: number;
@@ -107,22 +111,11 @@ export type FoodDiaryPlanResponse = {
 
 /* ─── Repository DB inputs ──────────────────────────────────────────────────── */
 
-export type InsertPlanDbInput = {
+/** Input for the atomic versioned upsert RPC (food_diary_upsert_plan). */
+export type UpsertPlanDbInput = {
   userId: string;
-  goal: string;
-  tmbKcal: number;
-  tmbSource: string;
-  tmbInput: PlanTmbSnapshot;
-  scanId: string | null;
-  routineLevel: string;
-  routineFactor: number;
-  plannedBalanceKcal: number;
-  toleranceKcal: number;
-};
-
-export type UpdatePlanDbInput = {
-  planId: string;
-  userId: string;
+  /** Local calendar day (YYYY-MM-DD) the new/updated version takes effect. */
+  today: string;
   goal: string;
   tmbKcal: number;
   tmbSource: string;

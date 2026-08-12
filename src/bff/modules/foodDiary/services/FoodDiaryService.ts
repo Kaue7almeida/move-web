@@ -22,7 +22,7 @@ import {
   ROUTINE_LEVEL_LABELS,
   statusLabelFor,
 } from "@/bff/modules/foodDiary/planEnergy";
-import { resolvePlanInputs } from "@/bff/modules/foodDiary/planBuild";
+import { resolvePlanInputs, selectPlanVersionForDay } from "@/bff/modules/foodDiary/planBuild";
 import type {
   FoodDiaryHud,
   FoodDiaryPlanRecord,
@@ -55,6 +55,7 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryEntryResponse,
   FoodDiaryEntryView,
+  FoodDiaryHistoryDay,
   FoodDiaryHistoryResponse,
   FoodDiaryItemRecord,
   FoodDiaryItemView,
@@ -178,12 +179,15 @@ export class FoodDiaryService {
       throw new ApiError(422, resolved.code, resolved.message);
     }
 
-    const existing = await this.foodDiaryRepository.findActivePlan(identity.userId);
-    const dbInput = { userId: identity.userId, goal: input.goal, ...resolved.value };
-
-    const saved = existing
-      ? await this.foodDiaryRepository.updateActivePlan({ ...dbInput, planId: existing.id })
-      : await this.foodDiaryRepository.insertActivePlan(dbInput);
+    // Versioned upsert: the RPC archives the previous version (later-day change)
+    // or updates in place (same-day edit) atomically. effective_from = local day.
+    const today = resolveLocalDay(undefined, resolveTimeZone(input.timeZone));
+    const saved = await this.foodDiaryRepository.upsertPlanVersioned({
+      userId: identity.userId,
+      today,
+      goal: input.goal,
+      ...resolved.value,
+    });
 
     const latestScan =
       scan ?? (await this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId));
@@ -206,37 +210,74 @@ export class FoodDiaryService {
     const rangeStartIso = localDayWindow(dayStrings[0], timeZone).startIso;
     const rangeEndIso = localDayWindow(dayStrings[dayStrings.length - 1], timeZone).endIso;
 
-    const [entries, activities, targets] = await Promise.all([
+    const [entries, activities, plans] = await Promise.all([
       this.foodDiaryRepository.listConfirmedEntriesInRange(
         identity.userId,
         rangeStartIso,
         rangeEndIso,
       ),
       this.foodDiaryRepository.listActivitiesInRange(identity.userId, rangeStartIso, rangeEndIso),
-      this.foodDiaryRepository.listTargetsEffectiveUpTo(identity.userId, endDay),
+      // All plan versions (active + archived) effective up to the window's end.
+      this.foodDiaryRepository.listPlansEffectiveUpTo(identity.userId, endDay),
     ]);
 
-    const days = dayStrings.map((dayString) => {
-      const consumedKcal = entries
-        .filter((entry) => localDayOf(entry.logged_at, timeZone) === dayString)
-        .reduce((sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_kcal) ?? 0), 0);
-
+    const days: FoodDiaryHistoryDay[] = dayStrings.map((dayString): FoodDiaryHistoryDay => {
+      const dayEntries = entries.filter(
+        (entry) => localDayOf(entry.logged_at, timeZone) === dayString,
+      );
+      const consumedKcal = dayEntries.reduce(
+        (sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_kcal) ?? 0),
+        0,
+      );
+      const consumedProteinG = dayEntries.reduce(
+        (sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_protein_g) ?? 0),
+        0,
+      );
       const burnedKcal = activities
         .filter((activity) => localDayOf(activity.logged_at, timeZone) === dayString)
         .reduce((sum, activity) => sum + toNumber(activity.kcal_burned), 0);
 
-      // targets are ordered effective_from desc: the first one on/before the day applies.
-      const targetRecord = targets.find((target) => target.effective_from <= dayString) ?? null;
-      const targetKcal = targetRecord ? toNumber(targetRecord.target_kcal) : null;
-      const balanceKcal =
-        targetKcal !== null ? roundKcal(consumedKcal - (targetKcal + burnedKcal)) : null;
+      // The plan version valid on this day = the one with the greatest
+      // effective_from ≤ day (plans are ordered effective_from desc).
+      const planRecord = selectPlanVersionForDay(plans, dayString);
+
+      if (!planRecord) {
+        return {
+          date: dayString,
+          consumedKcal: roundKcal(consumedKcal),
+          consumedProteinG: round1(consumedProteinG),
+          burnedKcal: roundKcal(burnedKcal),
+          status: "incomplete",
+          goal: null,
+          gastoDiaKcal: null,
+          alvoCentralKcal: null,
+          bandLowKcal: null,
+          bandHighKcal: null,
+          plannedBalanceKcal: null,
+        };
+      }
+
+      // SAME engine as Today — driven by that day's plan version + that day's activity.
+      const energy = computeEnergyPlan({
+        tmbKcal: toNumber(planRecord.tmb_kcal),
+        routineLevel: asRoutineLevel(planRecord.routine_level),
+        activitiesKcal: burnedKcal,
+        plannedBalanceKcal: toNumber(planRecord.planned_balance_kcal),
+        toleranceKcal: toNumber(planRecord.tolerance_kcal),
+      });
 
       return {
         date: dayString,
         consumedKcal: roundKcal(consumedKcal),
+        consumedProteinG: round1(consumedProteinG),
         burnedKcal: roundKcal(burnedKcal),
-        targetKcal: targetKcal !== null ? roundKcal(targetKcal) : null,
-        balanceKcal,
+        status: classifyConsumption(consumedKcal, energy),
+        goal: asGoal(planRecord.goal),
+        gastoDiaKcal: energy.gastoDiaKcal,
+        alvoCentralKcal: energy.alvoCentralKcal,
+        bandLowKcal: energy.bandLowKcal,
+        bandHighKcal: energy.bandHighKcal,
+        plannedBalanceKcal: toNumber(planRecord.planned_balance_kcal),
       };
     });
 
@@ -1054,6 +1095,7 @@ function mapPlanToView(record: FoodDiaryPlanRecord): FoodDiaryPlanView {
   return {
     id: record.id,
     status: record.status,
+    effectiveFrom: record.effective_from,
     goal,
     goalLabel: GOAL_LABELS[goal],
     tmbKcal: toNumber(record.tmb_kcal),

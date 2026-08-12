@@ -14,6 +14,7 @@ export const upsertPlanBodySchema = z
     routineLevel: z.enum(["sedentary", "light", "moderate", "high"]),
     plannedBalanceKcal: z.number().int().min(-3000).max(3000).optional(),
     toleranceKcal: z.number().int().positive().max(2000).optional(),
+    timeZone: z.string().max(64).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.tmbSource === "manual" && value.tmbKcal === undefined) {
