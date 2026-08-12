@@ -13,10 +13,16 @@ const MAX_ITEMS = 40;
 const MAX_ITEM_GRAMS = 5000;
 const MAX_TOTAL_KCAL = 12_000;
 
+export type ItemIdentification = "identified" | "ambiguous" | "unknown";
+
 export type NormalizedAiItem = {
   name: string;
   preparation: string | null;
   category: string | null;
+  /** Identity certainty (NOT accuracy): identified | ambiguous | unknown. */
+  identification: ItemIdentification;
+  /** Plausible identities when ambiguous (e.g. ["Frango","Porco","Bovino"]); else []. */
+  alternatives: string[];
   gramsEstimated: number;
   householdMeasure: string | null;
   confidence: number | null;
@@ -146,10 +152,19 @@ export function validateAndNormalizeAnalysis(
 
     seen.add(signature);
 
+    const alternatives = Array.isArray(item.alternatives)
+      ? item.alternatives
+          .map((value) => (typeof value === "string" ? value.trim() : ""))
+          .filter((value) => value.length > 0)
+          .slice(0, 8)
+      : [];
+
     normalized.push({
       name,
       preparation: nullableTrimmed(item.preparation),
       category: nullableTrimmed(item.category),
+      identification: item.identification,
+      alternatives,
       gramsEstimated: grams,
       householdMeasure: nullableTrimmed(item.householdMeasure),
       confidence: isFiniteNumber(item.confidence) ? clamp01(item.confidence) : null,

@@ -619,6 +619,8 @@ export class FoodDiaryService {
       name: item.name,
       preparation: item.preparation,
       category: item.category,
+      identification: item.identification,
+      alternatives: item.alternatives as unknown as Json,
       gramsEstimated: item.gramsEstimated,
       gramsConfirmed: null,
       householdMeasure: item.householdMeasure,
@@ -700,6 +702,9 @@ export class FoodDiaryService {
           name: added.name.trim(),
           preparation: added.preparation ?? null,
           category: added.category ?? null,
+          // Manual item: the user chose it, so the identity is not ambiguous.
+          identification: "identified",
+          alternatives: [] as unknown as Json,
           // Manual item: the informed grams are both the estimate and the confirmed value.
           gramsEstimated: added.grams,
           gramsConfirmed: added.grams,
@@ -967,6 +972,8 @@ function mapItemToView(record: FoodDiaryItemRecord): FoodDiaryItemView {
     name: record.name,
     preparation: record.preparation,
     category: record.category,
+    identification: record.identification,
+    alternatives: toStringArray(record.alternatives),
     gramsEstimated: toNumber(record.grams_estimated),
     gramsConfirmed: toNumberOrNull(record.grams_confirmed),
     householdMeasure: record.household_measure,

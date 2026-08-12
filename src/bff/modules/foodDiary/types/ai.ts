@@ -18,8 +18,19 @@ export type FoodDiaryAiInput = {
 
 const aiItemSchema = z.object({
   name: z.string(),
+  /** Per-item preparation (NOT a whole-plate choice): "grelhado","frito",... or null. */
   preparation: z.string().nullable(),
   category: z.string(),
+  /**
+   * How sure the model is about the food's IDENTITY (not the portion):
+   *  • identified → confident which food it is;
+   *  • ambiguous → cannot distinguish between plausible foods (see alternatives);
+   *  • unknown → cannot tell at all.
+   * confidence is NOT accuracy — it is the model's self-reported certainty.
+   */
+  identification: z.enum(["identified", "ambiguous", "unknown"]),
+  /** Plausible identities when ambiguous (e.g. ["Frango","Porco","Bovino"]). */
+  alternatives: z.array(z.string()),
   gramsEstimated: z.number(),
   householdMeasure: z.string().nullable(),
   confidence: z.number(),

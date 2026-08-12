@@ -54,6 +54,8 @@ export type CreateItemDbInput = {
   name: string;
   preparation: string | null;
   category: string | null;
+  identification: string;
+  alternatives: Json;
   gramsEstimated: number;
   gramsConfirmed: number | null;
   householdMeasure: string | null;

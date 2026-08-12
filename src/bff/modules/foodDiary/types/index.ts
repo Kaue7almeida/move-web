@@ -122,6 +122,10 @@ export type FoodDiaryItemView = {
   name: string;
   preparation: string | null;
   category: string | null;
+  /** Identity certainty: identified | ambiguous | unknown. */
+  identification: string;
+  /** Plausible identities when ambiguous; [] otherwise. */
+  alternatives: string[];
   gramsEstimated: number;
   gramsConfirmed: number | null;
   householdMeasure: string | null;

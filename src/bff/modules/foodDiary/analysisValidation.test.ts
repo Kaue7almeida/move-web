@@ -9,6 +9,8 @@ function makeItem(overrides: Partial<FoodDiaryAiItem> = {}): FoodDiaryAiItem {
     name: "Arroz",
     preparation: null,
     category: "carboidrato",
+    identification: "identified",
+    alternatives: [],
     gramsEstimated: 150,
     householdMeasure: null,
     confidence: 0.9,
@@ -74,5 +76,21 @@ test("drops exact-duplicate items", () => {
 
   if (result.ok) {
     assert.equal(result.items.length, 1);
+  }
+});
+
+test("carries per-item ambiguity through normalization (identity ≠ accuracy)", () => {
+  const ambiguous = makeItem({
+    name: "Carne grelhada",
+    identification: "ambiguous",
+    alternatives: [" Frango ", "Porco", "", "Carne bovina"],
+  });
+  const result = validateAndNormalizeAnalysis(makeAnalysis([ambiguous]));
+  assert.equal(result.ok, true);
+
+  if (result.ok) {
+    assert.equal(result.items[0].identification, "ambiguous");
+    // trimmed + empties dropped
+    assert.deepEqual(result.items[0].alternatives, ["Frango", "Porco", "Carne bovina"]);
   }
 });

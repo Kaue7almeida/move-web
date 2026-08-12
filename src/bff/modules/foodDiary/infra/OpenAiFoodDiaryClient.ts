@@ -53,6 +53,8 @@ const AI_ITEM_SCHEMA = {
     "name",
     "preparation",
     "category",
+    "identification",
+    "alternatives",
     "gramsEstimated",
     "householdMeasure",
     "confidence",
@@ -68,6 +70,8 @@ const AI_ITEM_SCHEMA = {
     name: { type: "string" },
     preparation: NULLABLE_STRING,
     category: { type: "string" },
+    identification: { type: "string", enum: ["identified", "ambiguous", "unknown"] },
+    alternatives: { type: "array", items: { type: "string" } },
     gramsEstimated: { type: "number" },
     householdMeasure: NULLABLE_STRING,
     confidence: { type: "number" },
@@ -136,11 +140,14 @@ STRICT CONSTRAINTS:
 • NEVER infer medical conditions or give clinical/prescriptive advice.
 
 PER ITEM:
-• name: food name in pt-BR. preparation: e.g. "grelhado","frito","cozido","assado","cru" or null.
+• name: food name in pt-BR. Preparation is PER ITEM, never for the whole plate (a plate can mix grilled meat, fried potato and boiled rice).
+• preparation: this item's cooking method e.g. "grelhado","frito","cozido","assado","refogado","cru" or null.
 • category: e.g. "carboidrato","proteina","vegetal","fruta","gordura","bebida","molho","outro".
+• identification: "identified" | "ambiguous" | "unknown". Use "ambiguous" when the photo does NOT let you tell which food it is AND the candidates differ in calories/macros (classic case: grilled meat that could be chicken, pork or beef). Use "unknown" when you truly cannot tell what it is. NEVER fake a specific identity you cannot see.
+• alternatives: when ambiguous, the plausible identities in pt-BR (e.g. ["Frango","Porco","Carne bovina"]); pick the most likely as the item name. Empty array otherwise.
 • gramsEstimated: estimated edible grams (> 0).
 • householdMeasure: e.g. "1 concha média","2 colheres de sopa" or null.
-• confidence: 0.0–1.0 for THIS item's estimate.
+• confidence: 0.0–1.0, your SELF-REPORTED certainty for this item — this is NOT a validated accuracy figure.
 • isPartiallyHidden: true if the item is largely covered by another on the plate.
 • kcalPer100g/proteinPer100g/carbPer100g/fatPer100g: per 100 g, non-negative. fiberPer100g: per 100 g or null.
 • uncertainty: short pt-BR note when relevant (e.g. "molho pode conter óleo não visível") or null.

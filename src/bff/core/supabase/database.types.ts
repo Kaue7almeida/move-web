@@ -345,6 +345,8 @@ type FoodDiaryItemsRow = {
   name: string;
   preparation: string | null;
   category: string | null;
+  identification: string;
+  alternatives: Json;
   grams_estimated: number;
   grams_confirmed: number | null;
   household_measure: string | null;
@@ -1036,6 +1038,8 @@ export type Database = {
           name: string;
           preparation?: string | null;
           category?: string | null;
+          identification?: string;
+          alternatives?: Json;
           grams_estimated: number;
           grams_confirmed?: number | null;
           household_measure?: string | null;
@@ -1061,6 +1065,8 @@ export type Database = {
           name?: string;
           preparation?: string | null;
           category?: string | null;
+          identification?: string;
+          alternatives?: Json;
           grams_estimated?: number;
           grams_confirmed?: number | null;
           household_measure?: string | null;

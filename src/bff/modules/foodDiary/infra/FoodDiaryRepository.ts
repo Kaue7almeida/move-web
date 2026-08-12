@@ -49,6 +49,8 @@ function toItemInsert(
     name: input.name,
     preparation: input.preparation,
     category: input.category,
+    identification: input.identification,
+    alternatives: input.alternatives,
     grams_estimated: input.gramsEstimated,
     grams_confirmed: input.gramsConfirmed,
     household_measure: input.householdMeasure,

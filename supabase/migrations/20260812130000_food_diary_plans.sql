@@ -106,4 +106,33 @@ begin
   end if;
 end $$;
 
+-- ─── 3. food_diary_items — ambiguidade por item (aditivo) ─────────────────────
+-- A IA passa a marcar a IDENTIDADE do alimento (identified/ambiguous/unknown) e,
+-- quando ambígua, as alternativas plausíveis — para o usuário escolher antes de
+-- confirmar. Linhas atuais recebem 'identified' e [].
+alter table public.food_diary_items
+  add column if not exists identification text not null default 'identified';
+
+alter table public.food_diary_items
+  add column if not exists alternatives jsonb not null default '[]'::jsonb;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'food_diary_items_identification_check'
+  ) then
+    alter table public.food_diary_items
+      add constraint food_diary_items_identification_check
+      check (identification in ('identified', 'ambiguous', 'unknown'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'food_diary_items_alternatives_array_check'
+  ) then
+    alter table public.food_diary_items
+      add constraint food_diary_items_alternatives_array_check
+      check (jsonb_typeof(alternatives) = 'array');
+  end if;
+end $$;
+
 commit;
