@@ -1,4 +1,5 @@
 import { isAdminEmail } from "@/bff/core/auth/adminAccess";
+import { isFoodDiaryBetaEmail } from "@/bff/core/auth/foodDiaryBetaAccess";
 import { ApiError } from "@/bff/core/errors/ApiError";
 import type { IProfileRepository } from "@/bff/modules/profile/types/IProfileRepository";
 import type {
@@ -827,6 +828,7 @@ export class ProfileService {
       isStudent,
       isTrainer,
       isAdmin: isAdminEmail(identity.email) && isTrainer,
+      foodDiaryEnabled: isFoodDiaryBetaEmail(identity.email) && isStudent,
       primaryRole,
       studentOnboardingCompleted,
       trainerOnboardingCompleted,

@@ -281,6 +281,95 @@ type NotificationsRow = {
   deleted_at: string | null;
 };
 
+type FoodDiaryEntriesRow = {
+  id: string;
+  student_user_id: string;
+  status: string;
+  meal_type: string;
+  logged_at: string;
+  photo_storage_path: string | null;
+  photo_content_type: string | null;
+  container_size: string | null;
+  meal_origin: string | null;
+  preparation_hint: string | null;
+  hidden_ingredients: Json;
+  is_shared_portion: boolean;
+  user_notes: string | null;
+  idempotency_key: string | null;
+  ai_result: Json;
+  ai_model: string | null;
+  confidence: number | null;
+  quality_overall: string | null;
+  needs_retake: boolean;
+  failure_reason: string | null;
+  estimated_total_kcal: number | null;
+  estimated_total_protein_g: number | null;
+  estimated_total_carb_g: number | null;
+  estimated_total_fat_g: number | null;
+  estimated_total_fiber_g: number | null;
+  confirmed_total_kcal: number | null;
+  confirmed_total_protein_g: number | null;
+  confirmed_total_carb_g: number | null;
+  confirmed_total_fat_g: number | null;
+  confirmed_total_fiber_g: number | null;
+  processing_started_at: string | null;
+  analyzed_at: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FoodDiaryItemsRow = {
+  id: string;
+  entry_id: string;
+  position: number;
+  name: string;
+  preparation: string | null;
+  category: string | null;
+  grams_estimated: number;
+  grams_confirmed: number | null;
+  household_measure: string | null;
+  confidence: number | null;
+  is_partially_hidden: boolean;
+  is_user_added: boolean;
+  is_removed: boolean;
+  nutrition_source: string;
+  nutrition_reference_id: string | null;
+  kcal_per_100g: number;
+  protein_per_100g: number;
+  carb_per_100g: number;
+  fat_per_100g: number;
+  fiber_per_100g: number | null;
+  ai_item_payload: Json;
+  created_at: string;
+  updated_at: string;
+};
+
+type DailyCalorieTargetsRow = {
+  id: string;
+  student_user_id: string;
+  effective_from: string;
+  target_kcal: number;
+  protein_percent: number;
+  carb_percent: number;
+  fat_percent: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ActivityEnergyEntriesRow = {
+  id: string;
+  student_user_id: string;
+  source: string;
+  workout_session_id: string | null;
+  label: string | null;
+  kcal_burned: number;
+  logged_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -836,6 +925,188 @@ export type Database = {
           read_at?: string | null;
           created_at?: string;
           deleted_at?: string | null;
+        }
+      >;
+      food_diary_entries: TableDefinition<
+        FoodDiaryEntriesRow,
+        {
+          id?: string;
+          student_user_id: string;
+          status?: string;
+          meal_type: string;
+          logged_at?: string;
+          photo_storage_path?: string | null;
+          photo_content_type?: string | null;
+          container_size?: string | null;
+          meal_origin?: string | null;
+          preparation_hint?: string | null;
+          hidden_ingredients?: Json;
+          is_shared_portion?: boolean;
+          user_notes?: string | null;
+          idempotency_key?: string | null;
+          ai_result?: Json;
+          ai_model?: string | null;
+          confidence?: number | null;
+          quality_overall?: string | null;
+          needs_retake?: boolean;
+          failure_reason?: string | null;
+          estimated_total_kcal?: number | null;
+          estimated_total_protein_g?: number | null;
+          estimated_total_carb_g?: number | null;
+          estimated_total_fat_g?: number | null;
+          estimated_total_fiber_g?: number | null;
+          confirmed_total_kcal?: number | null;
+          confirmed_total_protein_g?: number | null;
+          confirmed_total_carb_g?: number | null;
+          confirmed_total_fat_g?: number | null;
+          confirmed_total_fiber_g?: number | null;
+          processing_started_at?: string | null;
+          analyzed_at?: string | null;
+          confirmed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          student_user_id?: string;
+          status?: string;
+          meal_type?: string;
+          logged_at?: string;
+          photo_storage_path?: string | null;
+          photo_content_type?: string | null;
+          container_size?: string | null;
+          meal_origin?: string | null;
+          preparation_hint?: string | null;
+          hidden_ingredients?: Json;
+          is_shared_portion?: boolean;
+          user_notes?: string | null;
+          idempotency_key?: string | null;
+          ai_result?: Json;
+          ai_model?: string | null;
+          confidence?: number | null;
+          quality_overall?: string | null;
+          needs_retake?: boolean;
+          failure_reason?: string | null;
+          estimated_total_kcal?: number | null;
+          estimated_total_protein_g?: number | null;
+          estimated_total_carb_g?: number | null;
+          estimated_total_fat_g?: number | null;
+          estimated_total_fiber_g?: number | null;
+          confirmed_total_kcal?: number | null;
+          confirmed_total_protein_g?: number | null;
+          confirmed_total_carb_g?: number | null;
+          confirmed_total_fat_g?: number | null;
+          confirmed_total_fiber_g?: number | null;
+          processing_started_at?: string | null;
+          analyzed_at?: string | null;
+          confirmed_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
+      food_diary_items: TableDefinition<
+        FoodDiaryItemsRow,
+        {
+          id?: string;
+          entry_id: string;
+          position?: number;
+          name: string;
+          preparation?: string | null;
+          category?: string | null;
+          grams_estimated: number;
+          grams_confirmed?: number | null;
+          household_measure?: string | null;
+          confidence?: number | null;
+          is_partially_hidden?: boolean;
+          is_user_added?: boolean;
+          is_removed?: boolean;
+          nutrition_source?: string;
+          nutrition_reference_id?: string | null;
+          kcal_per_100g: number;
+          protein_per_100g: number;
+          carb_per_100g: number;
+          fat_per_100g: number;
+          fiber_per_100g?: number | null;
+          ai_item_payload?: Json;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          entry_id?: string;
+          position?: number;
+          name?: string;
+          preparation?: string | null;
+          category?: string | null;
+          grams_estimated?: number;
+          grams_confirmed?: number | null;
+          household_measure?: string | null;
+          confidence?: number | null;
+          is_partially_hidden?: boolean;
+          is_user_added?: boolean;
+          is_removed?: boolean;
+          nutrition_source?: string;
+          nutrition_reference_id?: string | null;
+          kcal_per_100g?: number;
+          protein_per_100g?: number;
+          carb_per_100g?: number;
+          fat_per_100g?: number;
+          fiber_per_100g?: number | null;
+          ai_item_payload?: Json;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
+      daily_calorie_targets: TableDefinition<
+        DailyCalorieTargetsRow,
+        {
+          id?: string;
+          student_user_id: string;
+          effective_from?: string;
+          target_kcal: number;
+          protein_percent?: number;
+          carb_percent?: number;
+          fat_percent?: number;
+          source?: string;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          student_user_id?: string;
+          effective_from?: string;
+          target_kcal?: number;
+          protein_percent?: number;
+          carb_percent?: number;
+          fat_percent?: number;
+          source?: string;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
+      activity_energy_entries: TableDefinition<
+        ActivityEnergyEntriesRow,
+        {
+          id?: string;
+          student_user_id: string;
+          source?: string;
+          workout_session_id?: string | null;
+          label?: string | null;
+          kcal_burned: number;
+          logged_at?: string;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          student_user_id?: string;
+          source?: string;
+          workout_session_id?: string | null;
+          label?: string | null;
+          kcal_burned?: number;
+          logged_at?: string;
+          created_at?: string;
+          updated_at?: string;
         }
       >;
     };

@@ -1,0 +1,325 @@
+import { ApiError } from "@/bff/core/errors/ApiError";
+import {
+  foodDiaryAiResponseSchema,
+  type FoodDiaryAiInput,
+  type FoodDiaryAiResponse,
+} from "@/bff/modules/foodDiary/types/ai";
+
+/* ─── OpenAI Responses API internal types ────────────────────────────────────── */
+
+type InputContentText = { type: "input_text"; text: string };
+type InputContentImage = { type: "input_image"; image_url: string };
+type InputContent = InputContentText | InputContentImage;
+
+type InputMessage = { role: "user"; content: InputContent[] };
+
+type OutputContentItem =
+  | { type: "output_text"; text: string }
+  | { type: "refusal"; refusal: string };
+
+type OutputItem = {
+  type: "message";
+  role?: "assistant";
+  content: OutputContentItem[];
+};
+
+type ResponsesApiBody = {
+  model: string;
+  instructions: string;
+  input: InputMessage[];
+  // One-shot analysis: do not let OpenAI persist Responses API application state for
+  // this call. The meal photo is user data and there is no conversational state.
+  store: false;
+  text: {
+    format: { type: "json_schema"; name: string; schema: Record<string, unknown>; strict: boolean };
+  };
+};
+
+type ResponsesApiResponse = {
+  status?: "completed" | "failed" | "in_progress" | "incomplete";
+  output?: OutputItem[];
+  output_text?: string | null;
+};
+
+/* ─── JSON Schema for Structured Outputs (kept in sync with foodDiaryAiResponseSchema) ─── */
+
+const NULLABLE_STRING = { anyOf: [{ type: "string" }, { type: "null" }] } as const;
+const NULLABLE_NUMBER = { anyOf: [{ type: "number" }, { type: "null" }] } as const;
+
+const AI_ITEM_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "name",
+    "preparation",
+    "category",
+    "gramsEstimated",
+    "householdMeasure",
+    "confidence",
+    "isPartiallyHidden",
+    "kcalPer100g",
+    "proteinPer100g",
+    "carbPer100g",
+    "fatPer100g",
+    "fiberPer100g",
+    "uncertainty",
+  ],
+  properties: {
+    name: { type: "string" },
+    preparation: NULLABLE_STRING,
+    category: { type: "string" },
+    gramsEstimated: { type: "number" },
+    householdMeasure: NULLABLE_STRING,
+    confidence: { type: "number" },
+    isPartiallyHidden: { type: "boolean" },
+    kcalPer100g: { type: "number" },
+    proteinPer100g: { type: "number" },
+    carbPer100g: { type: "number" },
+    fatPer100g: { type: "number" },
+    fiberPer100g: NULLABLE_NUMBER,
+    uncertainty: NULLABLE_STRING,
+  },
+} as const;
+
+const FOOD_DIARY_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["analysis"],
+  properties: {
+    analysis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["qualityOverall", "needsRetake", "confidence", "items", "observations"],
+      properties: {
+        qualityOverall: { type: "string", enum: ["boa", "media", "ruim"] },
+        needsRetake: { type: "boolean" },
+        confidence: { type: "number" },
+        items: { type: "array", items: AI_ITEM_SCHEMA },
+        observations: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+};
+
+/* ─── Prompt builders ────────────────────────────────────────────────────────── */
+
+const MEAL_TYPE_LABELS: Record<string, string> = {
+  cafe_da_manha: "café da manhã",
+  almoco: "almoço",
+  lanche: "lanche",
+  jantar: "jantar",
+  extra: "refeição extra",
+};
+
+const CONTAINER_SIZE_LABELS: Record<string, string> = {
+  pequeno: "prato/recipiente pequeno",
+  medio: "prato/recipiente médio",
+  grande: "prato/recipiente grande",
+};
+
+function buildSystemPrompt(): string {
+  return `\
+You are a meal photo analysis engine for the Move fitness app.
+
+CONTEXT: You receive ONE top-down photo of a meal plus optional textual context. You identify the foods, estimate each food's portion in grams, and estimate its per-100g nutrients. This is a fitness estimate — NOT a medical or clinical service, and NOT a promise of precision.
+
+SCALE / PORTION METHOD:
+• Use any reference object in the scene (cutlery is the most common) to calibrate scale.
+• Use the informed container size (small/medium/large plate or bowl) as a diameter anchor.
+• Reason about the visible area and apparent volume of each food to estimate grams.
+• If the portion is shared (informed), estimate the WHOLE plate — the review step splits it.
+
+STRICT CONSTRAINTS:
+• Return valid JSON only, matching the provided schema exactly. No prose outside the structure.
+• Do NOT reveal your reasoning/chain-of-thought — only the final structured result.
+• All human-readable strings (name, preparation, category, householdMeasure, uncertainty, observations) must be in pt-BR.
+• NEVER infer medical conditions or give clinical/prescriptive advice.
+
+PER ITEM:
+• name: food name in pt-BR. preparation: e.g. "grelhado","frito","cozido","assado","cru" or null.
+• category: e.g. "carboidrato","proteina","vegetal","fruta","gordura","bebida","molho","outro".
+• gramsEstimated: estimated edible grams (> 0).
+• householdMeasure: e.g. "1 concha média","2 colheres de sopa" or null.
+• confidence: 0.0–1.0 for THIS item's estimate.
+• isPartiallyHidden: true if the item is largely covered by another on the plate.
+• kcalPer100g/proteinPer100g/carbPer100g/fatPer100g: per 100 g, non-negative. fiberPer100g: per 100 g or null.
+• uncertainty: short pt-BR note when relevant (e.g. "molho pode conter óleo não visível") or null.
+
+QUALITY:
+• qualityOverall: "boa" | "media" | "ruim" (overall photo usability for estimation).
+• needsRetake: true ONLY when the photo is technically inadequate (no meal visible, too dark/blurry, unusable framing). Low confidence alone is NOT a reason to retake.
+• confidence: 0.0–1.0 for the overall analysis.
+
+observations: array of short pt-BR notes (blind spots, hidden ingredients, assumptions). Keep it brief; never medical.`;
+}
+
+function buildUserContent(input: FoodDiaryAiInput): InputContent[] {
+  const lines: string[] = [
+    "Analise esta refeição a partir da foto (vista de cima) e do contexto informado.",
+    "",
+    `Tipo de refeição: ${MEAL_TYPE_LABELS[input.mealType] ?? input.mealType}`,
+  ];
+
+  if (input.containerSize) {
+    lines.push(`Recipiente: ${CONTAINER_SIZE_LABELS[input.containerSize] ?? input.containerSize}`);
+  }
+  if (input.mealOrigin) {
+    lines.push(`Origem: ${input.mealOrigin}`);
+  }
+  if (input.preparationHint) {
+    lines.push(`Preparo informado: ${input.preparationHint}`);
+  }
+  if (input.hiddenIngredients.length > 0) {
+    lines.push(`Ingredientes possivelmente ocultos: ${input.hiddenIngredients.join(", ")}`);
+  }
+  if (input.isSharedPortion) {
+    lines.push("O aluno indicou que vai dividir esta porção — estime o prato inteiro mesmo assim.");
+  }
+  if (input.userNotes) {
+    lines.push(`Observações do aluno: ${input.userNotes}`);
+  }
+
+  return [
+    { type: "input_text", text: lines.join("\n") },
+    { type: "input_image", image_url: input.imageUrl },
+  ];
+}
+
+/* ─── Client ─────────────────────────────────────────────────────────────────── */
+
+export class OpenAiFoodDiaryClient {
+  private static readonly ENDPOINT = "https://api.openai.com/v1/responses";
+  private static readonly TIMEOUT_MS = 55_000;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly model: string,
+  ) {}
+
+  get modelName(): string {
+    return this.model;
+  }
+
+  async analyze(input: FoodDiaryAiInput): Promise<FoodDiaryAiResponse> {
+    const requestBody: ResponsesApiBody = {
+      model: this.model,
+      instructions: buildSystemPrompt(),
+      input: [{ role: "user", content: buildUserContent(input) }],
+      store: false,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "food_diary_analysis",
+          schema: FOOD_DIARY_JSON_SCHEMA,
+          strict: true,
+        },
+      },
+    };
+
+    let rawResponse: Response;
+
+    try {
+      rawResponse = await fetch(OpenAiFoodDiaryClient.ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(OpenAiFoodDiaryClient.TIMEOUT_MS),
+      });
+    } catch (error: unknown) {
+      const isTimeout =
+        error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+
+      throw new ApiError(
+        502,
+        "food_diary_ai_failed",
+        isTimeout
+          ? "Tempo limite da análise excedido. Tente novamente."
+          : "Não foi possível conectar ao serviço de análise.",
+      );
+    }
+
+    if (!rawResponse.ok) {
+      const errorBody = (await rawResponse.json().catch(() => null)) as Record<string, unknown> | null;
+      const innerError = errorBody?.["error"];
+      const errorCode =
+        typeof innerError === "object" && innerError !== null
+          ? (innerError as Record<string, unknown>)["code"]
+          : undefined;
+      const errorType =
+        typeof innerError === "object" && innerError !== null
+          ? (innerError as Record<string, unknown>)["type"]
+          : undefined;
+
+      if (rawResponse.status === 401 || errorCode === "invalid_api_key") {
+        throw new ApiError(500, "openai_api_key_missing", "Chave da API OpenAI inválida ou ausente.");
+      }
+
+      if (errorCode === "insufficient_quota" || errorType === "insufficient_quota") {
+        throw new ApiError(
+          503,
+          "food_diary_ai_quota_exceeded",
+          "O serviço de análise está temporariamente indisponível.",
+        );
+      }
+
+      throw new ApiError(502, "food_diary_ai_failed", "O serviço de análise retornou um erro.");
+    }
+
+    const responseData = (await rawResponse.json()) as ResponsesApiResponse;
+
+    if (responseData.status === "failed") {
+      throw new ApiError(502, "food_diary_ai_failed", "A análise falhou no serviço de IA.");
+    }
+
+    const messageOutput = responseData.output?.find((item) => item.type === "message");
+
+    if (messageOutput) {
+      const refusal = messageOutput.content.find((item) => item.type === "refusal");
+
+      if (refusal) {
+        throw new ApiError(
+          422,
+          "food_diary_image_rejected",
+          "A imagem não foi aceita pelo serviço de análise. Verifique o enquadramento e a iluminação.",
+        );
+      }
+    }
+
+    const textContent = messageOutput?.content.find((item) => item.type === "output_text");
+    const rawText =
+      (textContent as { type: "output_text"; text: string } | undefined)?.text
+      ?? responseData.output_text
+      ?? null;
+
+    if (!rawText) {
+      throw new ApiError(502, "food_diary_ai_failed", "O serviço de análise não retornou conteúdo.");
+    }
+
+    let parsed: unknown;
+
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      throw new ApiError(
+        502,
+        "food_diary_ai_invalid_response",
+        "O serviço de análise retornou um formato inválido.",
+      );
+    }
+
+    const validated = foodDiaryAiResponseSchema.safeParse(parsed);
+
+    if (!validated.success) {
+      throw new ApiError(
+        502,
+        "food_diary_ai_invalid_response",
+        "A resposta da análise não corresponde ao formato esperado.",
+      );
+    }
+
+    return validated.data;
+  }
+}

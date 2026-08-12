@@ -139,6 +139,12 @@ export type MeResponse = {
   isTrainer: boolean;
   /** Additive flag for future admin UI gating only; real security is ensureAdmin. */
   isAdmin: boolean;
+  /**
+   * Additive flag: whether the Food Diary beta is enabled for this user. Drives UI
+   * gating only (navigation, Home card, /app/diario access). The real security
+   * boundary is ensureFoodDiaryAccess on every /api/v1/food-diary/* route.
+   */
+  foodDiaryEnabled: boolean;
   primaryRole: PrimaryRole;
   studentOnboardingCompleted: boolean;
   trainerOnboardingCompleted: boolean;
