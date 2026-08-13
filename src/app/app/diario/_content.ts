@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { Camera, Ruler, Sun } from "lucide-react";
 
+import type { GoalKind, RoutineLevel } from "@/bff/modules/foodDiary/planEnergy";
 import type { ContainerSize, MealOrigin, MealType } from "@/bff/modules/foodDiary/types";
 
 /**
@@ -85,6 +86,46 @@ export const QUICK_ACTIVITIES: Array<{ label: string; kcal: number }> = [
   { label: "Caminhada · 40 min", kcal: 160 },
   { label: "Bike · 30 min", kcal: 240 },
 ];
+
+/* ─── Copy do plano (rótulos curtos + descrições humanas) ────────────────────── */
+
+/** Objetivo em uma frase curta (cards do wizard). */
+export const GOAL_DESCRIPTIONS: Record<GoalKind, string> = {
+  lose: "Consumir um pouco abaixo do seu gasto.",
+  maintain: "Ficar próximo do seu gasto diário.",
+  gain: "Consumir um pouco acima do seu gasto.",
+};
+
+/** Rótulo curto de rotina (cards legíveis, sem quebrar). */
+export const ROUTINE_SHORT_LABELS: Record<RoutineLevel, string> = {
+  sedentary: "Baixa",
+  light: "Leve",
+  moderate: "Moderada",
+  high: "Alta",
+};
+
+export const ROUTINE_DESCRIPTIONS: Record<RoutineLevel, string> = {
+  sedentary: "Trabalho sentado, pouca caminhada.",
+  light: "Caminhadas curtas no dia a dia.",
+  moderate: "Em pé ou caminhando boa parte do dia.",
+  high: "Trabalho físico ou muito movimento.",
+};
+
+/** Intensidade do objetivo (saldo planejado por baixo, em kcal/dia). */
+export type IntensityPreset = { key: string; label: string; balance: number };
+
+export const INTENSITY_PRESETS: Record<"lose" | "gain", IntensityPreset[]> = {
+  lose: [
+    { key: "leve", label: "Leve", balance: -200 },
+    { key: "moderada", label: "Moderada", balance: -400 },
+    { key: "acelerada", label: "Acelerada", balance: -600 },
+  ],
+  gain: [
+    { key: "leve", label: "Leve", balance: 150 },
+    { key: "moderada", label: "Moderada", balance: 300 },
+    { key: "acelerada", label: "Acelerada", balance: 500 },
+  ],
+};
 
 /* ─── Formatação ─────────────────────────────────────────────────────────────── */
 
