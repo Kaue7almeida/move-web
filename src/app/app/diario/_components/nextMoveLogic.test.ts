@@ -44,16 +44,23 @@ test("maintain/below → same 'entrar na faixa' framing", () => {
   assert.equal(result.primary.title, "Faltam 400 kcal para entrar na sua faixa");
 });
 
-test("gain/below → energy is welcome: how much still FITS (kcalToBandTop)", () => {
-  const result = computeNextMove(mkToday(2), mkHud({ goal: "gain", status: "below", kcalToBandTop: 500, consumedKcal: 1200 }));
-  assert.match(result.primary.title, /Ainda cabem 500 kcal/);
+test("gain/below → leads with 'faltam para entrar' (bandLow − consumido), never 'até o topo'", () => {
+  const result = computeNextMove(
+    mkToday(2),
+    mkHud({ goal: "gain", status: "below", bandLowKcal: 3000, consumedKcal: 764 }),
+  );
+  assert.equal(result.primary.title, "Faltam 2.236 kcal para entrar na sua faixa");
+  assert.doesNotMatch(result.primary.title, /topo/i);
+  assert.match(result.primary.detail ?? "", /massa/i); // complemento humano p/ ganho
 });
 
-test("within → reassuring 'dentro da faixa' with room-until-top detail", () => {
+test("within → reforça 'seguindo seu plano'; espaço restante é opcional (sem 'até o topo')", () => {
   const result = computeNextMove(mkToday(3), mkHud({ status: "within", kcalToBandTop: 150 }));
   assert.equal(result.primary.iconKey, "check");
-  assert.match(result.primary.title, /dentro da sua faixa/i);
-  assert.match(result.primary.detail ?? "", /150 kcal até o topo/);
+  assert.match(result.primary.title, /seguindo seu plano/i);
+  assert.match(result.primary.detail ?? "", /150 kcal/);
+  assert.match(result.primary.detail ?? "", /sem obrigação/i);
+  assert.doesNotMatch(result.primary.detail ?? "", /até o topo/i);
 });
 
 test("above → over-the-top amount + a non-punitive next-day nudge, no secondary", () => {

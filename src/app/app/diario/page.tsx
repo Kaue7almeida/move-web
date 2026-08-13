@@ -170,7 +170,7 @@ export default function DiaryPage() {
     <div className="space-y-6">
       <PageHeader
         title="Diário Alimentar"
-        description="Seu balanço calórico do dia, refeição a refeição."
+        description="Acompanhe seu objetivo de hoje — refeições e atividades."
       />
 
       {/* Abas: Hoje / Histórico */}

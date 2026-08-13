@@ -40,24 +40,18 @@ export function computeNextMove(
   const secondary = proteinMove(today, hud);
 
   if (hud.status === "below") {
-    if (hud.goal === "gain") {
-      return {
-        primary: {
-          iconKey: "utensils",
-          title: `Ainda cabem ${fmt(hud.kcalToBandTop)} kcal na sua faixa`,
-          detail: "Ganho de massa pede energia — uma refeição a mais aproxima do alvo.",
-        },
-        secondary,
-      };
-    }
-
+    // ABAIXO: a ação principal é SEMPRE quanto falta para ENTRAR na faixa
+    // (bandLow − consumido) — nunca "até o topo". Ganho de massa só muda o tom.
     const toEnter = Math.max(hud.bandLowKcal - hud.consumedKcal, 0);
 
     return {
       primary: {
         iconKey: "utensils",
         title: `Faltam ${fmt(toEnter)} kcal para entrar na sua faixa`,
-        detail: "Registre a próxima refeição para chegar lá.",
+        detail:
+          hud.goal === "gain"
+            ? "Ganho de massa pede energia — registre a próxima refeição para chegar lá."
+            : "Registre a próxima refeição para chegar lá.",
       },
       secondary,
     };
@@ -73,15 +67,16 @@ export function computeNextMove(
     };
   }
 
-  // within
+  // within — reforça que a pessoa JÁ está no plano; espaço restante é opcional,
+  // sem soar como obrigação de "comer até o topo".
   return {
     primary: {
       iconKey: "check",
-      title: "Você está dentro da sua faixa hoje",
+      title: "Você está seguindo seu plano hoje",
       detail:
         hud.kcalToBandTop > 0
-          ? `Ainda cabem ${fmt(hud.kcalToBandTop)} kcal até o topo — mantenha o ritmo.`
-          : "Mantenha o ritmo.",
+          ? `No seu ritmo — ainda cabem ${fmt(hud.kcalToBandTop)} kcal, sem obrigação de chegar ao topo.`
+          : "No seu ritmo — você já está no alvo de hoje.",
     },
     secondary,
   };

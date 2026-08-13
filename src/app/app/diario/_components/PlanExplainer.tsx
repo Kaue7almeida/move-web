@@ -55,8 +55,9 @@ export function PlanExplainer({ hud, plan }: { hud: FoodDiaryHud; plan: FoodDiar
           <span className="ml-1.5 text-sm font-medium text-muted">kcal</span>
         </p>
         <p className="mt-1.5 text-[14px] leading-relaxed text-muted-foreground">
-          Ficar dentro dessa faixa é seguir seu objetivo hoje. É uma estimativa que se ajusta conforme
-          você registra refeições e atividades — não uma prescrição.
+          Ficar dentro dessa faixa é seguir seu objetivo hoje. Suas refeições movem sua posição
+          dentro dela; suas atividades aumentam o gasto do dia e podem deslocar a própria faixa. É
+          uma estimativa, não uma prescrição.
         </p>
       </div>
     </div>
