@@ -17,7 +17,10 @@ import { DiaryHud } from "./_components/DiaryHud";
 import { DiaryToday } from "./_components/DiaryToday";
 import { DiaryHistory } from "./_components/DiaryHistory";
 import { MealWizard } from "./_components/MealWizard";
+import { NextMove } from "./_components/NextMove";
+import { PlanExplainer } from "./_components/PlanExplainer";
 import { PlanOnboarding } from "./_components/PlanOnboarding";
+import { PlanSummaryCard } from "./_components/PlanSummaryCard";
 import "./diario.css";
 
 type DiaryView = "hoje" | "historico";
@@ -236,6 +239,7 @@ function TodayPanel({
   onRefresh: () => void;
 }) {
   const [planSheetOpen, setPlanSheetOpen] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(false);
 
   if (state.status === "loading") {
     return <LoadingCard label="Carregando seu diário de hoje..." />;
@@ -261,19 +265,23 @@ function TodayPanel({
 
       {today.plan !== null && today.hud !== null ? (
         <div className="space-y-6">
-          <DiaryHud today={today} hud={today.hud} />
+          {/* Hierarquia 2.1: Missão/HUD → Próximo movimento → Registrar/Trilha/Refeições/Atividades → Plano */}
+          <DiaryHud hud={today.hud} onExplain={() => setExplainOpen(true)} />
 
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={() => setPlanSheetOpen(true)}
-              className="text-[12px] font-semibold text-accent hover:underline"
-            >
-              Ajustar meu plano
-            </button>
-          </div>
+          <NextMove today={today} hud={today.hud} />
 
           <DiaryToday today={today} onStartMeal={onStartMeal} onRefresh={onRefresh} hud={today.hud} />
+
+          <PlanSummaryCard
+            plan={today.plan}
+            hud={today.hud}
+            onExplain={() => setExplainOpen(true)}
+            onAdjust={() => setPlanSheetOpen(true)}
+          />
+
+          <BottomSheet open={explainOpen} onClose={() => setExplainOpen(false)} title="Como calculamos sua faixa?">
+            <PlanExplainer hud={today.hud} plan={today.plan} />
+          </BottomSheet>
 
           <BottomSheet open={planSheetOpen} onClose={() => setPlanSheetOpen(false)} title="Meu plano">
             <PlanOnboarding

@@ -1,35 +1,41 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Info, Loader2, ScanLine, Sparkles, Target } from "lucide-react";
+import { ArrowLeft, ArrowRight, Gauge, Info, Loader2, ScanLine, Sparkles, Target } from "lucide-react";
 import Link from "next/link";
 
+import { coerceBalanceToGoal } from "@/bff/modules/foodDiary/planBuild";
 import {
   computeEnergyPlan,
   estimateTmbFromBodyFat,
   GOAL_LABELS,
   type GoalKind,
-  ROUTINE_LEVEL_LABELS,
   type RoutineLevel,
   suggestedPlannedBalance,
   type TmbSource,
 } from "@/bff/modules/foodDiary/planEnergy";
-import { coerceBalanceToGoal } from "@/bff/modules/foodDiary/planBuild";
 import type { FoodDiaryPlanView, TmbSuggestion } from "@/bff/modules/foodDiary/types/plan";
 import { getPlan, upsertPlan } from "@/services/foodDiary/foodDiaryService";
 
 import { useAppShell } from "../../AppShellContext";
+import {
+  formatKcal,
+  GOAL_DESCRIPTIONS,
+  INTENSITY_PRESETS,
+  ROUTINE_DESCRIPTIONS,
+  ROUTINE_SHORT_LABELS,
+} from "../_content";
 import { describeFoodDiaryError } from "../_errors";
-import { formatKcal } from "../_content";
 
 const GOALS: GoalKind[] = ["lose", "maintain", "gain"];
 const ROUTINES: RoutineLevel[] = ["sedentary", "light", "moderate", "high"];
+const TOTAL_STEPS = 3;
 
 /**
- * Onboarding do plano energético (Meu Plano). Substitui a configuração simples de
- * calorias: objetivo + TMB (Scan / % de gordura / manual) + rotina + saldo
- * planejado. Reusa o motor puro (planEnergy) para o preview ao vivo — o BFF é a
- * fonte da verdade ao salvar.
+ * Meu Plano — wizard mobile de 3 passos (2.1): Objetivo → Metabolismo → Rotina+Plano.
+ * Substitui a config longa por passos curtos e legíveis. NÃO cria nova fórmula de TMB
+ * nem segundo motor: usa exatamente o conceito atual (planEnergy) por baixo. O BFF é a
+ * fonte da verdade ao salvar; o preview reusa o motor puro.
  */
 export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
   const { me } = useAppShell();
@@ -41,16 +47,18 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
   const [existing, setExisting] = useState<FoodDiaryPlanView | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const [step, setStep] = useState(1);
   const [goal, setGoal] = useState<GoalKind>("maintain");
   const [tmbSource, setTmbSource] = useState<TmbSource>("manual");
+  const [unknownHelp, setUnknownHelp] = useState(false);
   const [manualTmb, setManualTmb] = useState("");
   const [weightKg, setWeightKg] = useState("");
   const [bodyFatPercent, setBodyFatPercent] = useState("");
   const [routineLevel, setRoutineLevel] = useState<RoutineLevel>("light");
   const [balance, setBalance] = useState<number>(0);
   const [balanceTouched, setBalanceTouched] = useState(false);
+  const [showCustomBalance, setShowCustomBalance] = useState(false);
 
-  const [showTmbInfo, setShowTmbInfo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,15 +98,9 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
     };
   }, []);
 
-  // Saldo efetivo: segue a sugestão do objetivo até o usuário mexer no slider, e é
-  // SEMPRE coagido ao objetivo (lose ≤ 0 · maintain = 0 · gain ≥ 0). Derivado (sem
-  // setState em efeito) — então trocar de objetivo re-clampa na hora, e o preview
-  // mostrado é exatamente o que será persistido (o BFF aplica a mesma regra).
+  // Saldo efetivo — sempre coagido ao objetivo (lose ≤ 0 · maintain = 0 · gain ≥ 0),
+  // derivado (sem setState em efeito). O preview mostrado é o que será persistido.
   const effectiveBalance = coerceBalanceToGoal(goal, balanceTouched ? balance : suggestedPlannedBalance(goal));
-  // Faixa do slider por objetivo: perder só permite déficit; ganhar só superávit;
-  // manter fixa em 0 (sem slider).
-  const balanceRange =
-    goal === "lose" ? { min: -1000, max: 0 } : goal === "gain" ? { min: 0, max: 1000 } : { min: 0, max: 0 };
 
   const previewTmb = useMemo(() => {
     if (tmbSource === "manual") {
@@ -118,9 +120,17 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
     [previewTmb, routineLevel, effectiveBalance],
   );
 
-  const canSubmit =
-    previewTmb > 0 &&
-    (tmbSource !== "body_fat" || (Number(weightKg) > 0 && Number(bodyFatPercent) > 0));
+  const metabolismReady =
+    !unknownHelp
+    && previewTmb > 0
+    && (tmbSource !== "body_fat" || (Number(weightKg) > 0 && Number(bodyFatPercent) > 0));
+
+  const canSubmit = metabolismReady && preview !== null;
+
+  function selectSource(source: TmbSource) {
+    setTmbSource(source);
+    setUnknownHelp(false);
+  }
 
   async function submit() {
     if (!canSubmit || submitting) {
@@ -157,256 +167,475 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
   }
 
   return (
-    <section className="dia-rise space-y-5 rounded-2xl border border-border bg-surface p-5 sm:p-6">
-      <header className="text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-muted text-accent">
-          <Target size={26} strokeWidth={1.8} />
+    <section className="dia-rise space-y-5">
+      {/* Progresso */}
+      <div>
+        <div className="flex items-center justify-between">
+          <p className="text-[13px] font-bold uppercase tracking-wider text-accent">
+            Passo {step} de {TOTAL_STEPS}
+          </p>
+          <p className="text-[13px] font-medium text-muted">{STEP_TITLES[step - 1]}</p>
         </div>
-        <h2 className="mt-3 font-display text-xl font-bold text-foreground">
-          {existing ? "Ajustar meu plano" : "Vamos montar seu plano"}
-        </h2>
-        <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted">
-          Seu objetivo define a faixa-alvo do dia. Tudo é editável — são estimativas, não prescrição.
-        </p>
-      </header>
-
-      {/* Objetivo */}
-      <Group label="Qual seu objetivo?">
-        <div className="grid grid-cols-3 gap-2">
-          {GOALS.map((option) => (
-            <ChoiceCard
-              key={option}
-              active={goal === option}
-              label={GOAL_LABELS[option]}
-              onClick={() => setGoal(option)}
+        <div className="mt-2 flex gap-1.5" aria-hidden="true">
+          {Array.from({ length: TOTAL_STEPS }, (_, index) => (
+            <span
+              key={index}
+              className={[
+                "h-1.5 flex-1 rounded-full transition-colors",
+                index < step ? "bg-accent" : "bg-surface-strong",
+              ].join(" ")}
             />
           ))}
         </div>
-      </Group>
+      </div>
 
-      {/* TMB */}
-      <Group
-        label="Sua TMB (taxa metabólica basal)"
-        action={
-          <button
-            type="button"
-            onClick={() => setShowTmbInfo((v) => !v)}
-            className={[
-              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
-              showTmbInfo ? "bg-accent-soft text-accent" : "text-muted hover:text-foreground",
-            ].join(" ")}
-          >
-            <Info size={12} /> Entenda
-          </button>
-        }
-      >
-        {showTmbInfo && (
-          <p className="dia-rise mb-2 rounded-lg bg-surface-strong/60 p-2.5 text-[11px] leading-relaxed text-muted">
-            A TMB é a energia que o corpo gasta em repouso. Usamos a mesma fórmula do MoveScan
-            (sobre a massa magra). Ela é a base do seu gasto do dia — some sua rotina e atividades por
-            cima. É uma estimativa, não um exame.
-          </p>
-        )}
+      {step === 1 && (
+        <StepObjetivo goal={goal} onPick={setGoal} />
+      )}
 
-        <div className="flex flex-wrap gap-2">
-          {suggestion?.hasScan && (
-            <SourceChip active={tmbSource === "scan"} onClick={() => setTmbSource("scan")} label="Do meu MoveScan" />
-          )}
-          <SourceChip active={tmbSource === "body_fat"} onClick={() => setTmbSource("body_fat")} label="Por % de gordura" />
-          <SourceChip active={tmbSource === "manual"} onClick={() => setTmbSource("manual")} label="Informar TMB" />
-        </div>
+      {step === 2 && (
+        <StepMetabolismo
+          tmbSource={tmbSource}
+          unknownHelp={unknownHelp}
+          suggestion={suggestion}
+          canScan={canScan}
+          manualTmb={manualTmb}
+          weightKg={weightKg}
+          bodyFatPercent={bodyFatPercent}
+          onSelectSource={selectSource}
+          onUnknown={() => setUnknownHelp(true)}
+          onManualTmb={setManualTmb}
+          onWeight={setWeightKg}
+          onBodyFat={setBodyFatPercent}
+        />
+      )}
 
-        {tmbSource === "scan" && (
-          <div className="mt-3 rounded-xl border border-border bg-background/40 p-3 text-sm">
-            {suggestion?.tmbKcal ? (
-              <p className="text-foreground">
-                Do seu último Scan: <span className="font-bold">{formatKcal(suggestion.tmbKcal)} kcal</span>
-                {suggestion.leanMassKg ? (
-                  <span className="text-muted"> · massa magra {suggestion.leanMassKg} kg</span>
-                ) : null}
-              </p>
-            ) : (
-              <p className="text-muted">Seu Scan não trouxe uma TMB utilizável — use % de gordura ou informe manualmente.</p>
-            )}
-          </div>
-        )}
-
-        {tmbSource === "body_fat" && (
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <LabeledInput label="Peso (kg)" value={weightKg} onChange={setWeightKg} placeholder="80" />
-            <LabeledInput label="% de gordura" value={bodyFatPercent} onChange={setBodyFatPercent} placeholder="20" />
-          </div>
-        )}
-
-        {tmbSource === "manual" && (
-          <div className="mt-3">
-            <LabeledInput label="TMB (kcal/dia)" value={manualTmb} onChange={setManualTmb} placeholder="1700" />
-          </div>
-        )}
-
-        {canScan && !suggestion?.hasScan && (
-          <Link
-            href="/app/scan"
-            className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent hover:underline"
-          >
-            <ScanLine size={13} /> Fazer um MoveScan e usar esses dados aqui
-          </Link>
-        )}
-      </Group>
-
-      {/* Rotina */}
-      <Group label="Como é sua rotina fora dos treinos?">
-        <div className="space-y-2">
-          {ROUTINES.map((option) => (
-            <RoutineRow
-              key={option}
-              active={routineLevel === option}
-              label={ROUTINE_LEVEL_LABELS[option]}
-              onClick={() => setRoutineLevel(option)}
-            />
-          ))}
-        </div>
-      </Group>
-
-      {/* Saldo planejado — coerente com o objetivo (o slider não deixa contradizer). */}
-      <Group label="Saldo planejado (kcal/dia)">
-        {goal === "maintain" ? (
-          <p className="rounded-xl border border-border bg-background/40 p-3 text-[12px] leading-relaxed text-muted">
-            Manutenção fica em <span className="font-bold text-foreground">0 kcal</span> — comer no gasto
-            do dia. Escolha <em>perder</em> ou <em>ganhar</em> para planejar um saldo.
-          </p>
-        ) : (
-          <>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={balanceRange.min}
-                max={balanceRange.max}
-                step={50}
-                value={effectiveBalance}
-                onChange={(event) => {
-                  setBalance(coerceBalanceToGoal(goal, Number(event.target.value)));
-                  setBalanceTouched(true);
-                }}
-                className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
-                aria-label="Saldo planejado em kcal"
-              />
-              <span className="w-16 shrink-0 text-right text-sm font-bold tabular-nums text-foreground">
-                {effectiveBalance > 0 ? "+" : ""}
-                {effectiveBalance}
-              </span>
-            </div>
-            <p className="mt-1 text-[11px] text-muted">
-              {goal === "lose"
-                ? "Déficit — abaixo do gasto do dia (perder)."
-                : "Superávit — acima do gasto do dia (ganhar)."}
-            </p>
-          </>
-        )}
-      </Group>
-
-      {/* Preview */}
-      {preview && (
-        <div className="rounded-2xl border border-accent/30 bg-accent-muted/40 p-4 ring-1 ring-accent/10">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-accent">Sua faixa-alvo do dia</p>
-          <p className="mt-1 font-display text-2xl font-bold text-foreground">
-            {formatKcal(preview.bandLowKcal)}–{formatKcal(preview.bandHighKcal)}
-            <span className="ml-1.5 text-sm font-medium text-muted">kcal</span>
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted">
-            TMB {formatKcal(preview.tmbKcal)} × rotina {preview.routineFactor} = gasto base{" "}
-            {formatKcal(preview.gastoBaseKcal)} kcal. Atividades do dia entram por cima.
-          </p>
-        </div>
+      {step === 3 && (
+        <StepRotinaPlano
+          goal={goal}
+          routineLevel={routineLevel}
+          onRoutine={setRoutineLevel}
+          effectiveBalance={effectiveBalance}
+          showCustomBalance={showCustomBalance}
+          onPreset={(value) => {
+            setBalance(value);
+            setBalanceTouched(true);
+            setShowCustomBalance(false);
+          }}
+          onCustom={() => setShowCustomBalance(true)}
+          onBalance={(value) => {
+            setBalance(coerceBalanceToGoal(goal, value));
+            setBalanceTouched(true);
+          }}
+          preview={preview}
+          existing={existing !== null}
+        />
       )}
 
       {error && (
-        <p className="text-[12px] font-medium text-accent" role="alert">
+        <p className="text-[13px] font-medium text-accent" role="alert">
           {error}
         </p>
       )}
 
-      <button
-        type="button"
-        disabled={!canSubmit || submitting}
-        onClick={() => void submit()}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {submitting ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-        {existing ? "Salvar plano" : "Ativar meu plano"}
-        {!submitting && <ArrowRight size={16} />}
-      </button>
+      {/* Navegação */}
+      <div className="flex items-center gap-3 pt-1">
+        {step > 1 && (
+          <button
+            type="button"
+            onClick={() => setStep((current) => current - 1)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-4 py-3 text-[14px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft size={16} /> Voltar
+          </button>
+        )}
+
+        {step < TOTAL_STEPS ? (
+          <button
+            type="button"
+            disabled={step === 2 && !metabolismReady}
+            onClick={() => setStep((current) => current + 1)}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-[15px] font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Continuar <ArrowRight size={16} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!canSubmit || submitting}
+            onClick={() => void submit()}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-[15px] font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            {existing ? "Salvar plano" : "Ativar meu plano"}
+          </button>
+        )}
+      </div>
     </section>
+  );
+}
+
+const STEP_TITLES = ["Objetivo", "Metabolismo", "Rotina e plano"];
+
+/* ─── PASSO 1 — Objetivo ─── */
+
+function StepObjetivo({ goal, onPick }: { goal: GoalKind; onPick: (goal: GoalKind) => void }) {
+  return (
+    <div className="space-y-4">
+      <Header title="Qual é o seu objetivo?" subtitle="Ele define a faixa-alvo do seu dia. Dá pra mudar quando quiser." />
+      <div className="space-y-2.5">
+        {GOALS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onPick(option)}
+            aria-pressed={goal === option}
+            className={[
+              "flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all",
+              goal === option
+                ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30"
+                : "border-border bg-surface hover:border-accent/40",
+            ].join(" ")}
+          >
+            <span
+              className={[
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2",
+                goal === option ? "border-accent" : "border-border-strong",
+              ].join(" ")}
+            >
+              {goal === option && <span className="h-2.5 w-2.5 rounded-full bg-accent" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[16px] font-bold text-foreground">{GOAL_LABELS[option]}</span>
+              <span className="mt-0.5 block text-[14px] leading-snug text-muted-foreground">
+                {GOAL_DESCRIPTIONS[option]}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── PASSO 2 — Metabolismo ─── */
+
+function StepMetabolismo({
+  tmbSource,
+  unknownHelp,
+  suggestion,
+  canScan,
+  manualTmb,
+  weightKg,
+  bodyFatPercent,
+  onSelectSource,
+  onUnknown,
+  onManualTmb,
+  onWeight,
+  onBodyFat,
+}: {
+  tmbSource: TmbSource;
+  unknownHelp: boolean;
+  suggestion: TmbSuggestion | null;
+  canScan: boolean;
+  manualTmb: string;
+  weightKg: string;
+  bodyFatPercent: string;
+  onSelectSource: (source: TmbSource) => void;
+  onUnknown: () => void;
+  onManualTmb: (value: string) => void;
+  onWeight: (value: string) => void;
+  onBodyFat: (value: string) => void;
+}) {
+  const hasScan = suggestion?.hasScan ?? false;
+
+  return (
+    <div className="space-y-4">
+      <Header
+        title="Seu metabolismo (TMB)"
+        subtitle="A TMB é a energia que seu corpo gasta em repouso — a base do seu gasto do dia. De onde tiramos a sua?"
+      />
+
+      <div className="space-y-2.5">
+        {hasScan && (
+          <SourceCard
+            active={!unknownHelp && tmbSource === "scan"}
+            title="Usar meu MoveScan"
+            description={
+              suggestion?.tmbKcal
+                ? `Do seu último Scan: ${formatKcal(suggestion.tmbKcal)} kcal${suggestion.leanMassKg ? ` · massa magra ${suggestion.leanMassKg} kg` : ""}`
+                : "Seu Scan não trouxe uma TMB utilizável — use outra opção."
+            }
+            onClick={() => onSelectSource("scan")}
+          />
+        )}
+        <SourceCard
+          active={!unknownHelp && tmbSource === "body_fat"}
+          title="Tenho meu % de gordura"
+          description="Estimamos sua TMB a partir do peso e do percentual de gordura."
+          onClick={() => onSelectSource("body_fat")}
+        />
+        <SourceCard
+          active={!unknownHelp && tmbSource === "manual"}
+          title="Já sei minha TMB"
+          description="Você informa o valor em kcal/dia."
+          onClick={() => onSelectSource("manual")}
+        />
+        <SourceCard
+          active={unknownHelp}
+          title="Não sei esses dados"
+          description="Sem problema — te mostramos como conseguir."
+          onClick={onUnknown}
+        />
+      </div>
+
+      {/* Campos condicionais */}
+      {!unknownHelp && tmbSource === "body_fat" && (
+        <div className="grid grid-cols-2 gap-2">
+          <LabeledInput label="Peso (kg)" value={weightKg} onChange={onWeight} placeholder="80" />
+          <LabeledInput label="% de gordura" value={bodyFatPercent} onChange={onBodyFat} placeholder="20" />
+        </div>
+      )}
+
+      {!unknownHelp && tmbSource === "manual" && (
+        <LabeledInput label="TMB (kcal/dia)" value={manualTmb} onChange={onManualTmb} placeholder="1700" />
+      )}
+
+      {/* Área educativa "Não sei" */}
+      {unknownHelp && (
+        <div className="dia-rise space-y-3 rounded-2xl border border-accent/25 bg-accent-muted/25 p-4">
+          <p className="flex items-center gap-1.5 text-[14px] font-bold text-foreground">
+            <Info size={15} className="text-accent" /> Como descobrir sua TMB
+          </p>
+          <p className="text-[14px] leading-relaxed text-muted-foreground">
+            A TMB depende da sua composição corporal. Você pode conseguir esses dados numa
+            avaliação física ou numa bioimpedância — de lá saem seu <strong>% de gordura</strong> e
+            sua <strong>massa magra</strong>.
+          </p>
+          {canScan && !hasScan && (
+            <p className="text-[14px] leading-relaxed text-muted-foreground">
+              O <strong>MoveScan</strong> estima isso pra você a partir de uma foto.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2 pt-1">
+            {canScan && (
+              <Link
+                href="/app/scan"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-bold text-accent-on transition-colors hover:bg-accent-hover"
+              >
+                <ScanLine size={15} /> Fazer um MoveScan
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => onSelectSource("body_fat")}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-4 py-2.5 text-[14px] font-semibold text-foreground transition-colors hover:bg-surface-hover"
+            >
+              Tenho % de gordura
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectSource("manual")}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-4 py-2.5 text-[14px] font-semibold text-foreground transition-colors hover:bg-surface-hover"
+            >
+              Informar TMB
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── PASSO 3 — Rotina + Plano ─── */
+
+function StepRotinaPlano({
+  goal,
+  routineLevel,
+  onRoutine,
+  effectiveBalance,
+  showCustomBalance,
+  onPreset,
+  onCustom,
+  onBalance,
+  preview,
+  existing,
+}: {
+  goal: GoalKind;
+  routineLevel: RoutineLevel;
+  onRoutine: (level: RoutineLevel) => void;
+  effectiveBalance: number;
+  showCustomBalance: boolean;
+  onPreset: (balance: number) => void;
+  onCustom: () => void;
+  onBalance: (balance: number) => void;
+  preview: ReturnType<typeof computeEnergyPlan> | null;
+  existing: boolean;
+}) {
+  const presets = goal === "lose" ? INTENSITY_PRESETS.lose : goal === "gain" ? INTENSITY_PRESETS.gain : [];
+  const matchedPreset = presets.find((preset) => preset.balance === effectiveBalance);
+  const isCustom = presets.length > 0 && !matchedPreset;
+  const sliderRange = goal === "lose" ? { min: -1000, max: 0 } : { min: 0, max: 1000 };
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-3">
+        <Header title="Como é sua rotina?" subtitle="Fora dos treinos que você registra — só o dia a dia." />
+        <div className="grid grid-cols-2 gap-2">
+          {ROUTINES.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onRoutine(option)}
+              aria-pressed={routineLevel === option}
+              className={[
+                "rounded-2xl border p-3.5 text-left transition-all",
+                routineLevel === option
+                  ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30"
+                  : "border-border bg-surface hover:border-accent/40",
+              ].join(" ")}
+            >
+              <span className="block text-[15px] font-bold text-foreground">{ROUTINE_SHORT_LABELS[option]}</span>
+              <span className="mt-0.5 block text-[13px] leading-snug text-muted">{ROUTINE_DESCRIPTIONS[option]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Intensidade do objetivo (lose/gain) — saldo por baixo. Manutenção = neutra. */}
+      {presets.length > 0 ? (
+        <div className="space-y-3">
+          <Header title="Intensidade do objetivo" subtitle={goal === "lose" ? "Quão abaixo do gasto você quer ficar." : "Quão acima do gasto você quer ficar."} />
+          <div className="flex flex-wrap gap-2">
+            {presets.map((preset) => (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => onPreset(preset.balance)}
+                aria-pressed={!isCustom && matchedPreset?.key === preset.key}
+                className={[
+                  "rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-colors",
+                  !isCustom && matchedPreset?.key === preset.key
+                    ? "border-accent bg-accent text-accent-on"
+                    : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+                ].join(" ")}
+              >
+                {preset.label}
+                <span className="ml-1.5 text-[12px] opacity-80">
+                  {preset.balance > 0 ? "+" : ""}
+                  {preset.balance}
+                </span>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={onCustom}
+              aria-pressed={showCustomBalance || isCustom}
+              className={[
+                "rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-colors",
+                showCustomBalance || isCustom
+                  ? "border-accent bg-accent text-accent-on"
+                  : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+              ].join(" ")}
+            >
+              Personalizado
+            </button>
+          </div>
+
+          {(showCustomBalance || isCustom) && (
+            <div className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3">
+              <input
+                type="range"
+                min={sliderRange.min}
+                max={sliderRange.max}
+                step={50}
+                value={effectiveBalance}
+                onChange={(event) => onBalance(Number(event.target.value))}
+                className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
+                aria-label="Saldo planejado em kcal por dia"
+              />
+              <span className="w-20 shrink-0 text-right text-[14px] font-bold tabular-nums text-foreground">
+                {effectiveBalance > 0 ? "+" : ""}
+                {effectiveBalance} kcal
+              </span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="flex items-center gap-2 rounded-xl border border-border bg-surface p-3.5 text-[14px] leading-relaxed text-muted-foreground">
+          <Target size={16} className="shrink-0 text-accent" />
+          Manutenção: sua faixa fica no seu gasto do dia, sem déficit nem superávit.
+        </p>
+      )}
+
+      {/* Tela final — plano pronto */}
+      {preview && (
+        <div className="dia-rise rounded-2xl border border-success/30 bg-success-soft/30 p-5 text-center">
+          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-success-soft text-success">
+            <Gauge size={22} strokeWidth={1.9} />
+          </span>
+          <p className="mt-2.5 text-[16px] font-bold text-foreground">
+            {existing ? "Seu plano atualizado" : "Seu plano está pronto"}
+          </p>
+          <p className="mt-1 text-[13px] font-medium uppercase tracking-wider text-muted">Sua faixa-alvo inicial</p>
+          <p className="mt-1 font-display text-3xl font-bold text-foreground">
+            {formatKcal(preview.bandLowKcal)}–{formatKcal(preview.bandHighKcal)}
+            <span className="ml-1.5 text-sm font-medium text-muted">kcal</span>
+          </p>
+          <p className="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
+            TMB {formatKcal(preview.tmbKcal)} × rotina {preview.routineFactor} = gasto base{" "}
+            {formatKcal(preview.gastoBaseKcal)} kcal. Suas atividades entram por cima, dia a dia.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ─── bits ─── */
 
-function Group({ label, action, children }: { label: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted">{label}</p>
-        {action}
-      </div>
-      {children}
+      <h3 className="text-[18px] font-bold leading-tight text-foreground">{title}</h3>
+      <p className="mt-1 text-[14px] leading-relaxed text-muted-foreground">{subtitle}</p>
     </div>
   );
 }
 
-function ChoiceCard({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function SourceCard({
+  active,
+  title,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={[
-        "rounded-xl border px-2 py-3 text-xs font-bold transition-all",
-        active
-          ? "border-accent bg-accent text-accent-on shadow-[0_0_14px_rgba(242,106,27,0.28)]"
-          : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
-function SourceChip({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all",
-        active
-          ? "border-accent bg-accent text-accent-on"
-          : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
-
-function RoutineRow({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-colors",
-        active ? "border-accent bg-accent-muted text-foreground" : "border-border bg-surface text-muted-foreground hover:bg-surface-hover",
+        "flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all",
+        active ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30" : "border-border bg-surface hover:border-accent/40",
       ].join(" ")}
     >
       <span
         className={[
-          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2",
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2",
           active ? "border-accent" : "border-border-strong",
         ].join(" ")}
       >
-        {active && <span className="h-2 w-2 rounded-full bg-accent" />}
+        {active && <span className="h-2.5 w-2.5 rounded-full bg-accent" />}
       </span>
-      {label}
+      <span className="min-w-0">
+        <span className="block text-[15px] font-bold text-foreground">{title}</span>
+        <span className="mt-0.5 block text-[13px] leading-snug text-muted-foreground">{description}</span>
+      </span>
     </button>
   );
 }
@@ -424,14 +653,14 @@ function LabeledInput({
 }) {
   return (
     <label className="block">
-      <span className="text-[11px] font-medium text-muted">{label}</span>
+      <span className="text-[13px] font-medium text-muted">{label}</span>
       <input
         type="number"
         inputMode="decimal"
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm font-semibold text-foreground placeholder:font-normal placeholder:text-muted"
+        className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-[15px] font-semibold text-foreground placeholder:font-normal placeholder:text-muted"
       />
     </label>
   );

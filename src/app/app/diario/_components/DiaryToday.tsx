@@ -115,11 +115,14 @@ export function DiaryToday({ today, onStartMeal, onRefresh, hud = null }: DiaryT
       </section>
       )}
 
+      {/* CTA universal: + Registrar (foto / texto / docinho / atividade) — vem primeiro */}
+      <QuickRegister onStartPhoto={() => onStartMeal(suggestMealByHour())} onSaved={onRefresh} />
+
       {/* Trilha do dia */}
       <section className="dia-rise rounded-2xl border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-foreground">Trilha do dia</h2>
-          <p className="text-[11px] text-muted">
+          <h2 className="text-[15px] font-bold text-foreground">Trilha do dia</h2>
+          <p className="text-[13px] text-muted">
             {anchorsLogged} de 4 refeições
             {extrasCount > 0 && (
               <span className="ml-1.5 rounded-full bg-accent-soft px-2 py-0.5 font-semibold text-accent">
@@ -130,9 +133,6 @@ export function DiaryToday({ today, onStartMeal, onRefresh, hud = null }: DiaryT
         </div>
         <DayTrail loggedMeals={loggedMeals} kcalByMeal={kcalByMeal} onPickMeal={onStartMeal} />
       </section>
-
-      {/* CTA universal: + Registrar (foto / texto / docinho / atividade) */}
-      <QuickRegister onStartPhoto={() => onStartMeal(suggestMealByHour())} onSaved={onRefresh} />
 
       {/* Refeições do dia */}
       <MealsSection
@@ -445,7 +445,7 @@ function MealsSection({
 
   return (
     <section className="dia-rise">
-      <h2 className="text-xs font-medium uppercase tracking-wider text-muted">Refeições de hoje</h2>
+      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted">Refeições de hoje</h2>
       <ul className="mt-3 space-y-3">
         {meals.length === 0 && (
           <li className="rounded-xl border border-dashed border-border p-5 text-center text-sm text-muted">
@@ -468,7 +468,7 @@ function MealsSection({
                       {MEAL_LABELS[meal.mealType as MealType] ?? "Refeição"}
                       <span className="ml-2 text-xs font-normal text-muted">{formatMealTime(meal.loggedAt)}</span>
                     </p>
-                    <p className="mt-0.5 truncate text-xs text-muted">
+                    <p className="mt-0.5 truncate text-[13px] text-muted">
                       {items.map((item) => item.name).join(" · ") || "Sem itens"}
                     </p>
                   </div>
@@ -489,7 +489,7 @@ function MealsSection({
                   </button>
                 </div>
               </div>
-              <p className="mt-3 text-[11px] text-muted">
+              <p className="mt-3 text-[13px] text-muted">
                 P {macros.proteinG}g · C {macros.carbG}g · G {macros.fatG}g
               </p>
             </li>
@@ -557,8 +557,8 @@ function BurnSection({
   return (
     <section className="dia-rise">
       <div className="flex items-center justify-between">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-muted">Gasto calórico</h2>
-        <p className="text-[11px] text-muted">Atividades registradas hoje</p>
+        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted">Gasto calórico</h2>
+        <p className="text-[13px] text-muted">Atividades registradas hoje</p>
       </div>
 
       <div className="mt-3 space-y-3">
