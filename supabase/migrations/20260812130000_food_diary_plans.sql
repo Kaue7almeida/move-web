@@ -115,7 +115,10 @@ alter table public.food_diary_plans enable row level security;
 --                               de dias anteriores a preservar);
 --  • edição em dia posterior  → arquiva a versão ativa (superseded_at = now) e
 --                               insere uma NOVA versão ativa (effective_from = hoje).
--- FOR UPDATE serializa trocas concorrentes do mesmo usuário. search_path explícito.
+-- Serialização por usuário: um lock na linha do DONO em public.profiles(id) é tomado
+-- ANTES de ler/gravar. Isso cobre a 1ª criação concorrente — quando ainda não há linha
+-- em food_diary_plans para o FOR UPDATE travar — evitando duas versões ativas. Tudo
+-- abaixo do lock é atômico. SECURITY INVOKER + search_path explícito.
 create or replace function public.food_diary_upsert_plan(
   p_user_id uuid,
   p_today date,
@@ -137,6 +140,12 @@ declare
   v_current public.food_diary_plans;
   v_result public.food_diary_plans;
 begin
+  -- Trava estável por usuário (dono do plano). Serializa upserts concorrentes do mesmo
+  -- usuário mesmo na 1ª criação (sem linha em food_diary_plans ainda). Sem isso, duas
+  -- requisições simultâneas poderiam inserir duas versões ativas antes de o índice
+  -- parcial 'one active per user' entrar em cena (uma falharia, mas com corrida feia).
+  perform 1 from public.profiles where id = p_user_id for update;
+
   select * into v_current
   from public.food_diary_plans
   where user_id = p_user_id and status = 'active'
@@ -177,6 +186,19 @@ begin
   return v_result;
 end;
 $$;
+
+-- ─── 1c. Menor privilégio na RPC ──────────────────────────────────────────────
+-- A função é SECURITY INVOKER e chamada EXCLUSIVAMENTE pelo BFF (service role). Nenhum
+-- papel de cliente pode executá-la diretamente: revoga o EXECUTE default de `public`
+-- (e explicitamente de anon/authenticated) e concede apenas ao service_role. A
+-- assinatura exata identifica a função (evita casar overloads acidentais).
+revoke execute on function public.food_diary_upsert_plan(
+  uuid, date, text, integer, text, jsonb, uuid, text, numeric, integer, integer
+) from public, anon, authenticated;
+
+grant execute on function public.food_diary_upsert_plan(
+  uuid, date, text, integer, text, jsonb, uuid, text, numeric, integer, integer
+) to service_role;
 
 -- ─── 2. food_diary_entries — registro por texto / docinho (aditivo) ───────────
 alter table public.food_diary_entries

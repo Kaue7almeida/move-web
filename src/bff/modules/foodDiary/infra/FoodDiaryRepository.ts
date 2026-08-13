@@ -406,6 +406,27 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     if (input.preparation !== undefined) {
       payload.preparation = input.preparation;
     }
+    if (input.identification !== undefined) {
+      payload.identification = input.identification;
+    }
+    if (input.alternatives !== undefined) {
+      payload.alternatives = input.alternatives;
+    }
+    if (input.kcalPer100g !== undefined) {
+      payload.kcal_per_100g = input.kcalPer100g;
+    }
+    if (input.proteinPer100g !== undefined) {
+      payload.protein_per_100g = input.proteinPer100g;
+    }
+    if (input.carbPer100g !== undefined) {
+      payload.carb_per_100g = input.carbPer100g;
+    }
+    if (input.fatPer100g !== undefined) {
+      payload.fat_per_100g = input.fatPer100g;
+    }
+    if (input.fiberPer100g !== undefined) {
+      payload.fiber_per_100g = input.fiberPer100g;
+    }
 
     const { data, error } = await this.supabase
       .from("food_diary_items")

@@ -1,16 +1,16 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertTriangle, Check, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, HelpCircle, Loader2, Sparkles } from "lucide-react";
 
 import type { FoodDiaryItemView, MealType } from "@/bff/modules/foodDiary/types";
-import { analyzeEntry, createEntry } from "@/services/foodDiary/foodDiaryService";
+import { analyzeEntry, createEntry, FoodDiaryApiError } from "@/services/foodDiary/foodDiaryService";
 
 import { CONTAINER_OPTIONS, MEAL_CHOICES, MEAL_LABELS } from "../_content";
 import { describeFoodDiaryError } from "../_errors";
 import { MealReview } from "./MealReview";
 
-type Step = "form" | "processing" | "review" | "done" | "error";
+type Step = "form" | "processing" | "clarify" | "review" | "done" | "error";
 
 function makeKey(): string {
   try {
@@ -45,13 +45,36 @@ export function TextMealFlow({
   const [qualityOverall, setQualityOverall] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [entryId, setEntryId] = useState<string | null>(null);
+  // Descrição vaga → UMA pergunta curta, depois re-analisa (sem adivinhar em silêncio).
+  const [clarifyQuestion, setClarifyQuestion] = useState<string | null>(null);
+  const [clarifyAnswer, setClarifyAnswer] = useState("");
 
   const idempotencyKeyRef = useRef<string>(makeKey());
+  // Só é true na re-análise logo após a resposta da pergunta — evita loop de clarificação.
+  const skipClarificationRef = useRef(false);
 
   const canSubmit = description.trim().length >= 3;
 
-  async function run() {
-    if (!canSubmit) {
+  // Uma nova descrição não pode reusar o rascunho anterior (que guardou o texto antigo).
+  function changeDescription(value: string) {
+    setDescription(value);
+
+    if (entryId) {
+      setEntryId(null);
+      idempotencyKeyRef.current = makeKey();
+    }
+  }
+
+  async function run(descOverride?: string) {
+    // Envio novo pelo formulário → permite clarificação de novo; re-análise pós-resposta
+    // (descOverride presente) mantém o skip de uma execução.
+    if (descOverride === undefined) {
+      skipClarificationRef.current = false;
+    }
+
+    const desc = (descOverride ?? description).trim();
+
+    if (desc.length < 3) {
       return;
     }
 
@@ -66,7 +89,7 @@ export function TextMealFlow({
         const created = await createEntry({
           mealType,
           inputKind: mode,
-          textDescription: description.trim(),
+          textDescription: desc,
           containerSize: isSnack && size ? (size as "pequeno" | "medio" | "grande") : undefined,
           userNotes: kcalNote,
           idempotencyKey: idempotencyKeyRef.current,
@@ -75,7 +98,7 @@ export function TextMealFlow({
         setEntryId(id);
       }
 
-      const analyzed = await analyzeEntry(id);
+      const analyzed = await analyzeEntry(id, { skipClarification: skipClarificationRef.current });
 
       if (analyzed.entry.status === "completed") {
         setItems(analyzed.entry.items);
@@ -86,9 +109,32 @@ export function TextMealFlow({
         setStep("error");
       }
     } catch (caught) {
+      // Descrição vaga: o backend pede UMA pergunta. Mostra, o usuário responde, e a
+      // re-análise (entrada nova, com a resposta anexada) segue mesmo se ainda vaga.
+      if (caught instanceof FoodDiaryApiError && caught.code === "food_diary_needs_clarification") {
+        setClarifyQuestion(caught.message);
+        setClarifyAnswer("");
+        // A entry atual foi finalizada como 'failed'; a resposta cria uma nova.
+        setEntryId(null);
+        idempotencyKeyRef.current = makeKey();
+        setStep("clarify");
+        return;
+      }
+
       setErrorMessage(describeFoodDiaryError(caught).message);
       setStep("error");
     }
+  }
+
+  function submitClarification() {
+    const answer = clarifyAnswer.trim();
+    const combined = answer ? `${description.trim()}. ${answer}` : description.trim();
+
+    // Reflete no textarea (transparência) e re-analisa já com o detalhe, sem re-perguntar.
+    setDescription(combined);
+    setClarifyQuestion(null);
+    skipClarificationRef.current = true;
+    void run(combined);
   }
 
   if (step === "processing") {
@@ -97,6 +143,50 @@ export function TextMealFlow({
         <Loader2 size={26} className="animate-spin text-accent" />
         <p className="text-sm font-medium text-foreground">Estimando a partir da sua descrição…</p>
         <p className="text-[11px] text-muted">Usa IA e pode levar alguns segundos.</p>
+      </div>
+    );
+  }
+
+  if (step === "clarify") {
+    return (
+      <div className="space-y-4 py-2">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-muted text-accent">
+            <HelpCircle size={24} strokeWidth={1.8} />
+          </span>
+          <p className="text-sm font-semibold text-foreground">Só uma coisa pra estimar direito</p>
+          <p className="max-w-sm text-sm text-muted">{clarifyQuestion}</p>
+        </div>
+
+        <input
+          type="text"
+          autoFocus
+          value={clarifyAnswer}
+          onChange={(event) => setClarifyAnswer(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              submitClarification();
+            }
+          }}
+          placeholder="Sua resposta (ex.: uma fatia média)"
+          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+        />
+
+        <button
+          type="button"
+          onClick={submitClarification}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover"
+        >
+          <Sparkles size={16} />
+          Responder e estimar
+        </button>
+        <button
+          type="button"
+          onClick={() => submitClarification()}
+          className="w-full text-center text-[12px] font-medium text-muted hover:text-foreground"
+        >
+          Estimar mesmo assim
+        </button>
       </div>
     );
   }
@@ -172,7 +262,7 @@ export function TextMealFlow({
         </p>
         <textarea
           value={description}
-          onChange={(event) => setDescription(event.target.value)}
+          onChange={(event) => changeDescription(event.target.value)}
           rows={isSnack ? 2 : 3}
           placeholder={isSnack ? "Ex.: 1 barra de chocolate ao leite" : "Ex.: 2 pães de queijo e um café com leite"}
           className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground placeholder:text-muted"

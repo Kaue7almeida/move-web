@@ -14,6 +14,7 @@ import {
   suggestedPlannedBalance,
   type TmbSource,
 } from "@/bff/modules/foodDiary/planEnergy";
+import { coerceBalanceToGoal } from "@/bff/modules/foodDiary/planBuild";
 import type { FoodDiaryPlanView, TmbSuggestion } from "@/bff/modules/foodDiary/types/plan";
 import { getPlan, upsertPlan } from "@/services/foodDiary/foodDiaryService";
 
@@ -89,9 +90,15 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
     };
   }, []);
 
-  // Saldo efetivo: segue a sugestão do objetivo até o usuário mexer no slider
-  // (derivado — sem setState em efeito).
-  const effectiveBalance = balanceTouched ? balance : suggestedPlannedBalance(goal);
+  // Saldo efetivo: segue a sugestão do objetivo até o usuário mexer no slider, e é
+  // SEMPRE coagido ao objetivo (lose ≤ 0 · maintain = 0 · gain ≥ 0). Derivado (sem
+  // setState em efeito) — então trocar de objetivo re-clampa na hora, e o preview
+  // mostrado é exatamente o que será persistido (o BFF aplica a mesma regra).
+  const effectiveBalance = coerceBalanceToGoal(goal, balanceTouched ? balance : suggestedPlannedBalance(goal));
+  // Faixa do slider por objetivo: perder só permite déficit; ganhar só superávit;
+  // manter fixa em 0 (sem slider).
+  const balanceRange =
+    goal === "lose" ? { min: -1000, max: 0 } : goal === "gain" ? { min: 0, max: 1000 } : { min: 0, max: 0 };
 
   const previewTmb = useMemo(() => {
     if (tmbSource === "manual") {
@@ -242,7 +249,7 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
             href="/app/scan"
             className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent hover:underline"
           >
-            <ScanLine size={13} /> Fazer um MoveScan para uma TMB mais precisa
+            <ScanLine size={13} /> Fazer um MoveScan e usar esses dados aqui
           </Link>
         )}
       </Group>
@@ -261,34 +268,41 @@ export function PlanOnboarding({ onSaved }: { onSaved: () => void }) {
         </div>
       </Group>
 
-      {/* Saldo planejado */}
+      {/* Saldo planejado — coerente com o objetivo (o slider não deixa contradizer). */}
       <Group label="Saldo planejado (kcal/dia)">
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={-1000}
-            max={1000}
-            step={50}
-            value={effectiveBalance}
-            onChange={(event) => {
-              setBalance(Number(event.target.value));
-              setBalanceTouched(true);
-            }}
-            className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
-            aria-label="Saldo planejado em kcal"
-          />
-          <span className="w-16 shrink-0 text-right text-sm font-bold tabular-nums text-foreground">
-            {effectiveBalance > 0 ? "+" : ""}
-            {effectiveBalance}
-          </span>
-        </div>
-        <p className="mt-1 text-[11px] text-muted">
-          {effectiveBalance < 0
-            ? "Déficit — abaixo do gasto do dia."
-            : effectiveBalance > 0
-              ? "Superávit — acima do gasto do dia."
-              : "Manutenção — no gasto do dia."}
-        </p>
+        {goal === "maintain" ? (
+          <p className="rounded-xl border border-border bg-background/40 p-3 text-[12px] leading-relaxed text-muted">
+            Manutenção fica em <span className="font-bold text-foreground">0 kcal</span> — comer no gasto
+            do dia. Escolha <em>perder</em> ou <em>ganhar</em> para planejar um saldo.
+          </p>
+        ) : (
+          <>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={balanceRange.min}
+                max={balanceRange.max}
+                step={50}
+                value={effectiveBalance}
+                onChange={(event) => {
+                  setBalance(coerceBalanceToGoal(goal, Number(event.target.value)));
+                  setBalanceTouched(true);
+                }}
+                className="h-1.5 flex-1 cursor-pointer accent-[#f26a1b]"
+                aria-label="Saldo planejado em kcal"
+              />
+              <span className="w-16 shrink-0 text-right text-sm font-bold tabular-nums text-foreground">
+                {effectiveBalance > 0 ? "+" : ""}
+                {effectiveBalance}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-muted">
+              {goal === "lose"
+                ? "Déficit — abaixo do gasto do dia (perder)."
+                : "Superávit — acima do gasto do dia (ganhar)."}
+            </p>
+          </>
+        )}
       </Group>
 
       {/* Preview */}

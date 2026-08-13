@@ -105,6 +105,20 @@ const BY_CODE: Record<string, FoodDiaryErrorInfo> = {
     retryable: false,
   },
 
+  /* Revisão: identidade ambígua não resolvida (o front normalmente já bloqueia) */
+  food_diary_items_unresolved: {
+    title: "Escolha o tipo dos itens",
+    message: "Alguns itens ficaram com identidade incerta. Escolha um candidato (ou remova o item) antes de confirmar.",
+    retake: false,
+    retryable: false,
+  },
+  food_diary_item_resolution_invalid: {
+    title: "Não consegui aplicar a escolha",
+    message: "A escolha do item ficou inconsistente. Selecione um candidato novamente.",
+    retake: false,
+    retryable: false,
+  },
+
   /* Beta / acesso */
   food_diary_access_required: {
     title: "Recurso em beta",

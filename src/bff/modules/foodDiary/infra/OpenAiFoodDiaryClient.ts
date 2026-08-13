@@ -47,6 +47,20 @@ type ResponsesApiResponse = {
 const NULLABLE_STRING = { anyOf: [{ type: "string" }, { type: "null" }] } as const;
 const NULLABLE_NUMBER = { anyOf: [{ type: "number" }, { type: "null" }] } as const;
 
+const AI_ALTERNATIVE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "kcalPer100g", "proteinPer100g", "carbPer100g", "fatPer100g", "fiberPer100g"],
+  properties: {
+    name: { type: "string" },
+    kcalPer100g: { type: "number" },
+    proteinPer100g: { type: "number" },
+    carbPer100g: { type: "number" },
+    fatPer100g: { type: "number" },
+    fiberPer100g: NULLABLE_NUMBER,
+  },
+} as const;
+
 const AI_ITEM_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -72,7 +86,7 @@ const AI_ITEM_SCHEMA = {
     preparation: NULLABLE_STRING,
     category: { type: "string" },
     identification: { type: "string", enum: ["identified", "ambiguous", "unknown"] },
-    alternatives: { type: "array", items: { type: "string" } },
+    alternatives: { type: "array", items: AI_ALTERNATIVE_SCHEMA },
     gramsEstimated: { type: "number" },
     householdMeasure: NULLABLE_STRING,
     confidence: { type: "number" },
@@ -94,10 +108,20 @@ const FOOD_DIARY_JSON_SCHEMA: Record<string, unknown> = {
     analysis: {
       type: "object",
       additionalProperties: false,
-      required: ["qualityOverall", "needsRetake", "confidence", "items", "observations"],
+      required: [
+        "qualityOverall",
+        "needsRetake",
+        "needsClarification",
+        "clarificationQuestion",
+        "confidence",
+        "items",
+        "observations",
+      ],
       properties: {
         qualityOverall: { type: "string", enum: ["boa", "media", "ruim"] },
         needsRetake: { type: "boolean" },
+        needsClarification: { type: "boolean" },
+        clarificationQuestion: NULLABLE_STRING,
         confidence: { type: "number" },
         items: { type: "array", items: AI_ITEM_SCHEMA },
         observations: { type: "array", items: { type: "string" } },
@@ -145,7 +169,7 @@ PER ITEM:
 • preparation: this item's cooking method e.g. "grelhado","frito","cozido","assado","refogado","cru" or null.
 • category: e.g. "carboidrato","proteina","vegetal","fruta","gordura","bebida","molho","outro".
 • identification: "identified" | "ambiguous" | "unknown". Use "ambiguous" when the photo does NOT let you tell which food it is AND the candidates differ in calories/macros (classic case: grilled meat that could be chicken, pork or beef). Use "unknown" when you truly cannot tell what it is. NEVER fake a specific identity you cannot see.
-• alternatives: when ambiguous, the plausible identities in pt-BR (e.g. ["Frango","Porco","Carne bovina"]); pick the most likely as the item name. Empty array otherwise.
+• alternatives: when ambiguous, the plausible identities in pt-BR, EACH WITH ITS OWN per-100g nutrients (name, kcalPer100g, proteinPer100g, carbPer100g, fatPer100g, fiberPer100g) so the user can pick a COMPLETE candidate without another AI call. Pick the most likely as the item's own name/nutrients. Empty array when not ambiguous.
 • gramsEstimated: estimated edible grams (> 0).
 • householdMeasure: e.g. "1 concha média","2 colheres de sopa" or null.
 • confidence: 0.0–1.0, your SELF-REPORTED certainty for this item — this is NOT a validated accuracy figure.
@@ -156,6 +180,7 @@ PER ITEM:
 QUALITY:
 • qualityOverall: "boa" | "media" | "ruim" (overall photo usability for estimation).
 • needsRetake: true ONLY when the photo is technically inadequate (no meal visible, too dark/blurry, unusable framing). Low confidence alone is NOT a reason to retake.
+• needsClarification: false and clarificationQuestion: null — the photo path resolves doubt via needsRetake / ambiguity alternatives, never a text question.
 • confidence: 0.0–1.0 for the overall analysis.
 
 observations: array of short pt-BR notes (blind spots, hidden ingredients, assumptions). Keep it brief; never medical.`;
@@ -200,8 +225,14 @@ You are a meal analysis engine for the Move fitness app.
 CONTEXT: You receive a TEXT description of what someone ate (NO photo). Identify the foods, estimate each food's portion in grams, and estimate its per-100g nutrients. This is a fitness estimate — NOT a medical service, and NOT a promise of precision.
 
 METHOD:
-• Parse quantities from the text ("2 pães de queijo", "um prato de", "uma barra pequena"). If a quantity is missing, assume a single typical serving and note the assumption in observations.
+• Parse quantities from the text ("2 pães de queijo", "um prato de", "uma barra pequena").
 • If the user states an approximate total kcal, treat it as a hint, not ground truth — still return per-item macros.
+
+CLARIFICATION (do NOT guess in silence):
+• A description can be too vague to estimate honestly — a bare food word with no portion and no defining detail (e.g. "bolo", "carne", "salgado", "um doce"). Wildly different calories fit the same word (a thin slice vs. a big piece; lean vs. fatty cut).
+• In that case set needsClarification=true and put ONE short, specific pt-BR question in clarificationQuestion (e.g. "Qual era aproximadamente o tamanho da fatia?" or "Era um salgado assado ou frito, e de que tamanho?"). Ask for the SINGLE most decisive missing detail — never a questionnaire.
+• When needsClarification=true, still fill items with your best provisional guess (the UI re-analyzes after the answer). Otherwise set needsClarification=false and clarificationQuestion=null.
+• A description that gives a portion, a count, or a defining detail is NOT vague — do not ask when you can reasonably estimate.
 
 STRICT CONSTRAINTS:
 • Return valid JSON only, matching the provided schema exactly. No prose outside the structure.
@@ -212,8 +243,8 @@ STRICT CONSTRAINTS:
 PER ITEM:
 • name (pt-BR). preparation POR ITEM (e.g. "frito","assado","cru") or null.
 • category: "carboidrato","proteina","vegetal","fruta","gordura","bebida","molho","outro".
-• identification: "identified" | "ambiguous" | "unknown". Use "ambiguous" only when the text truly does not disambiguate a food whose calories differ a lot; list alternatives in pt-BR. NEVER fake certainty.
-• alternatives: pt-BR list when ambiguous; else [].
+• identification: "identified" | "ambiguous" | "unknown". Use "ambiguous" only when the text truly does not disambiguate a food whose calories differ a lot (e.g. "carne" that could be frango/porco/bovino). NEVER fake certainty.
+• alternatives: when ambiguous, the plausible identities in pt-BR, EACH WITH ITS OWN per-100g nutrients (name, kcalPer100g, proteinPer100g, carbPer100g, fatPer100g, fiberPer100g) so the user can pick a COMPLETE candidate without another AI call. Pick the most likely as the item's own name/nutrients. Empty array when not ambiguous.
 • gramsEstimated (> 0). householdMeasure (pt-BR) or null.
 • confidence: 0.0–1.0 self-reported certainty (NOT accuracy). isPartiallyHidden: false for text.
 • kcalPer100g/proteinPer100g/carbPer100g/fatPer100g per 100 g (non-negative). fiberPer100g per 100 g or null.

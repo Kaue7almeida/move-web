@@ -212,11 +212,17 @@ export async function uploadEntryPhoto(
   return (await response.json()) as FoodDiaryPhotoResponse;
 }
 
-export async function analyzeEntry(entryId: string): Promise<FoodDiaryEntryResponse> {
+export async function analyzeEntry(
+  entryId: string,
+  options?: { skipClarification?: boolean },
+): Promise<FoodDiaryEntryResponse> {
   const response = await authenticatedFetch(`/api/v1/food-diary/entries/${entryId}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ timeZone: clientTimeZone() }),
+    body: JSON.stringify({
+      timeZone: clientTimeZone(),
+      ...(options?.skipClarification ? { skipClarification: true } : {}),
+    }),
   });
 
   if (!response.ok) {

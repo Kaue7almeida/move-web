@@ -23,6 +23,7 @@ import {
   statusLabelFor,
 } from "@/bff/modules/foodDiary/planEnergy";
 import { resolvePlanInputs, selectPlanVersionForDay } from "@/bff/modules/foodDiary/planBuild";
+import { isUnresolvedIdentity, resolveItemIdentity } from "@/bff/modules/foodDiary/reviewResolution";
 import type {
   FoodDiaryHud,
   FoodDiaryPlanRecord,
@@ -57,6 +58,7 @@ import type {
   FoodDiaryEntryView,
   FoodDiaryHistoryDay,
   FoodDiaryHistoryResponse,
+  FoodDiaryItemAlternative,
   FoodDiaryItemRecord,
   FoodDiaryItemView,
   FoodDiaryPhotoResponse,
@@ -673,6 +675,38 @@ export class FoodDiaryService {
       throw new ApiError(422, validation.code, validation.message);
     }
 
+    // Text/snack only: if the description was too vague to estimate honestly, ask ONE
+    // short question instead of guessing in silence. The UI shows it, the user answers,
+    // and the re-analysis (skipClarification) accepts the best estimate — no clarify loop.
+    const isTextual = inputKind === "text" || inputKind === "snack";
+
+    if (isTextual && validation.needsClarification && !options.skipClarification) {
+      await this.foodDiaryRepository.replaceEntryItems(entryId, []);
+      await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+        status: "failed",
+        aiResult: aiResultJson,
+        aiModel: aiClient.modelName,
+        confidence: null,
+        qualityOverall: analysis.qualityOverall,
+        needsRetake: false,
+        failureReason: "needs_clarification",
+        estimatedTotalKcal: null,
+        estimatedTotalProteinG: null,
+        estimatedTotalCarbG: null,
+        estimatedTotalFatG: null,
+        estimatedTotalFiberG: null,
+        analyzedAt,
+      });
+
+      const question =
+        validation.clarificationQuestion
+        ?? "Pode detalhar melhor a quantidade ou o tamanho da porção?";
+
+      throw new ApiError(422, "food_diary_needs_clarification", question, {
+        clarificationQuestion: question,
+      });
+    }
+
     // Persist items FIRST, then mark completed — never a completed entry without items.
     const items: CreateItemDbInput[] = validation.items.map((item, index) => ({
       entryId,
@@ -736,6 +770,7 @@ export class FoodDiaryService {
     }
 
     for (const edit of input.items ?? []) {
+      const resolution = resolveItemIdentity(edit);
       const updated = await this.foodDiaryRepository.updateItemForEntry({
         itemId: edit.id,
         entryId,
@@ -743,6 +778,7 @@ export class FoodDiaryService {
         isRemoved: edit.isRemoved,
         name: edit.name?.trim() ? edit.name.trim() : undefined,
         preparation: edit.preparation,
+        ...resolution,
       });
 
       if (!updated) {
@@ -813,6 +849,21 @@ export class FoodDiaryService {
 
     const items = await this.foodDiaryRepository.listItemsByEntryId(entryId);
     const activeItems = items.filter((item) => !item.is_removed);
+
+    // Last barrier: never confirm a meal whose active items still have an unresolved
+    // identity (ambiguous/unknown). The user must pick a candidate — or remove the item
+    // — in review first. A frango→porco choice, or "Outro", flips it to "identified".
+    const unresolved = activeItems.filter((item) => isUnresolvedIdentity(item.identification));
+
+    if (unresolved.length > 0) {
+      throw new ApiError(
+        422,
+        "food_diary_items_unresolved",
+        "Antes de confirmar, resolva os itens com identidade ambígua (escolha um candidato ou remova o item).",
+        { unresolvedCount: unresolved.length },
+      );
+    }
+
     const totals = computeConfirmedTotals(activeItems);
 
     const confirmed = await this.foodDiaryRepository.finalizeEntryConfirmation(entryId, {
@@ -995,6 +1046,56 @@ function toStringArray(value: Json): string[] {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+/**
+ * Parse the persisted `alternatives` JSON (array of complete candidates) into views.
+ * Tolerant of legacy rows: a bare string becomes a name-only candidate with zeroed
+ * macros; malformed entries are skipped. Never throws — a bad column can't break a read.
+ */
+function parseItemAlternatives(value: Json): FoodDiaryItemAlternative[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const out: FoodDiaryItemAlternative[] = [];
+
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const name = entry.trim();
+
+      if (name) {
+        out.push({ name, kcalPer100g: 0, proteinPer100g: 0, carbPer100g: 0, fatPer100g: 0, fiberPer100g: null });
+      }
+
+      continue;
+    }
+
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+
+    const record = entry as Record<string, Json>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const protein = numberOrNull(record.proteinPer100g);
+    const carb = numberOrNull(record.carbPer100g);
+    const fat = numberOrNull(record.fatPer100g);
+
+    if (!name || protein === null || carb === null || fat === null) {
+      continue;
+    }
+
+    out.push({
+      name,
+      kcalPer100g: numberOrNull(record.kcalPer100g) ?? round1(4 * protein + 4 * carb + 9 * fat),
+      proteinPer100g: protein,
+      carbPer100g: carb,
+      fatPer100g: fat,
+      fiberPer100g: numberOrNull(record.fiberPer100g),
+    });
+  }
+
+  return out;
+}
+
 function groupItemsByEntry(items: FoodDiaryItemRecord[]): Map<string, FoodDiaryItemRecord[]> {
   const grouped = new Map<string, FoodDiaryItemRecord[]>();
 
@@ -1034,7 +1135,7 @@ function mapItemToView(record: FoodDiaryItemRecord): FoodDiaryItemView {
     preparation: record.preparation,
     category: record.category,
     identification: record.identification,
-    alternatives: toStringArray(record.alternatives),
+    alternatives: parseItemAlternatives(record.alternatives),
     gramsEstimated: toNumber(record.grams_estimated),
     gramsConfirmed: toNumberOrNull(record.grams_confirmed),
     householdMeasure: record.household_measure,

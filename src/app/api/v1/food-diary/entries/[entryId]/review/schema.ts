@@ -8,6 +8,15 @@ const reviewItemEditSchema = z.object({
   isRemoved: z.boolean().optional(),
   name: z.string().trim().min(1).max(120).optional(),
   preparation: z.string().trim().max(120).nullable().optional(),
+  // Ambiguity resolution: you resolve an identity, you never re-ambiguate it —
+  // so only "identified" is accepted. Sending macros requires this to be set
+  // (the service recomputes kcal and clears the alternatives).
+  identification: z.literal("identified").optional(),
+  kcalPer100g: z.number().min(0).max(1000).optional(),
+  proteinPer100g: z.number().min(0).max(100).optional(),
+  carbPer100g: z.number().min(0).max(100).optional(),
+  fatPer100g: z.number().min(0).max(100).optional(),
+  fiberPer100g: z.number().min(0).max(100).nullable().optional(),
 });
 
 // Manual item (P1 has no TACO/USDA): the client supplies the per-100g values.

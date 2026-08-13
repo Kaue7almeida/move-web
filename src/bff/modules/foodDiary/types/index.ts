@@ -79,15 +79,36 @@ export type CreateEntryDraftInput = {
 export type AnalyzeEntryInput = {
   /** IANA time zone used to resolve the entry's local day for the daily quota. */
   timeZone?: string;
+  /**
+   * Text/snack only: when true, a vague description is accepted as a best estimate
+   * instead of raising food_diary_needs_clarification again. The UI sets this on the
+   * re-analysis after the user answered the single clarification question.
+   */
+  skipClarification?: boolean;
 };
 
-/** A human edit to a detected item during review. Absent fields are left unchanged. */
+/**
+ * A human edit to a detected item during review. Absent fields are left unchanged.
+ *
+ * Resolving an AMBIGUOUS identity (picking one of the alternatives, or "Outro")
+ * is a coherent swap: the client sends the chosen name AND its full per-100g
+ * nutrients, plus identification="identified". Sending a nutrient field requires
+ * identification="identified" — the backend rejects a nutrient change that leaves
+ * the item ambiguous (an inconsistent state).
+ */
 export type ReviewItemEdit = {
   id: string;
   gramsConfirmed?: number | null;
   isRemoved?: boolean;
   name?: string;
   preparation?: string | null;
+  /** Resolution of an ambiguous/unknown identity. Only "identified" is accepted. */
+  identification?: "identified";
+  kcalPer100g?: number;
+  proteinPer100g?: number;
+  carbPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number | null;
 };
 
 /** A manual item added during review (P1 has no TACO/USDA — values come from the payload). */
@@ -121,6 +142,20 @@ export type CalorieTargetView = {
   source: string;
 };
 
+/**
+ * A plausible identity for an ambiguous item, carrying its OWN complete nutrient
+ * profile. Picking it in review swaps the item's whole profile (name + macros) with
+ * no second AI call. kcal is derived from macros, same as the item.
+ */
+export type FoodDiaryItemAlternative = {
+  name: string;
+  kcalPer100g: number;
+  proteinPer100g: number;
+  carbPer100g: number;
+  fatPer100g: number;
+  fiberPer100g: number | null;
+};
+
 export type FoodDiaryItemView = {
   id: string;
   entryId: string;
@@ -130,8 +165,8 @@ export type FoodDiaryItemView = {
   category: string | null;
   /** Identity certainty: identified | ambiguous | unknown. */
   identification: string;
-  /** Plausible identities when ambiguous; [] otherwise. */
-  alternatives: string[];
+  /** Complete candidate identities when ambiguous (name + macros); [] otherwise. */
+  alternatives: FoodDiaryItemAlternative[];
   gramsEstimated: number;
   gramsConfirmed: number | null;
   householdMeasure: string | null;

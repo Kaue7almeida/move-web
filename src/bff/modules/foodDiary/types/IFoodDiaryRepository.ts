@@ -79,6 +79,14 @@ export type UpdateItemDbInput = {
   isRemoved?: boolean;
   name?: string;
   preparation?: string | null;
+  /** Ambiguity resolution: set identity + (optionally) the chosen candidate's macros. */
+  identification?: string;
+  alternatives?: Json;
+  kcalPer100g?: number;
+  proteinPer100g?: number;
+  carbPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number | null;
 };
 
 export type ConfirmEntryDbInput = {

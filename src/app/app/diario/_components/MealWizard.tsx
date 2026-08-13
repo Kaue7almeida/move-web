@@ -40,6 +40,7 @@ import {
 } from "../_content";
 import { describeFoodDiaryError, type FoodDiaryErrorInfo } from "../_errors";
 import { itemGrams, itemMacros, sumMacros } from "../_nutrition";
+import { type ItemResolution, needsResolution, resolutionEdit, resolvedView } from "../_review";
 import { useCountUp } from "./BalanceRing";
 
 type WizardStep = "prep" | "foto" | "contexto" | "processing" | "review" | "done" | "error";
@@ -129,7 +130,7 @@ export function MealWizard({
   const [items, setItems] = useState<FoodDiaryItemView[]>([]);
   const [gramsById, setGramsById] = useState<Record<string, number>>({});
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
-  const [nameById, setNameById] = useState<Record<string, string>>({});
+  const [resolutionById, setResolutionById] = useState<Record<string, ItemResolution>>({});
   const [qualityOverall, setQualityOverall] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -154,19 +155,18 @@ export function MealWizard({
     [items, removedIds],
   );
   const totals = useMemo(
-    () => sumMacros(activeItems.map((item) => itemMacros(item, gramsById[item.id] ?? itemGrams(item)))),
-    [activeItems, gramsById],
-  );
-  // Itens ambíguos precisam de escolha do usuário antes de confirmar.
-  const unresolvedAmbiguous = useMemo(
     () =>
-      activeItems.some(
-        (item) =>
-          item.identification === "ambiguous" &&
-          item.alternatives.length > 0 &&
-          !(item.id in nameById),
+      sumMacros(
+        activeItems.map((item) =>
+          itemMacros(resolvedView(item, resolutionById[item.id]), gramsById[item.id] ?? itemGrams(item)),
+        ),
       ),
-    [activeItems, nameById],
+    [activeItems, gramsById, resolutionById],
+  );
+  // Itens ambíguos/desconhecidos precisam de escolha do usuário antes de confirmar.
+  const hasUnresolved = useMemo(
+    () => activeItems.some((item) => needsResolution(item) && !(item.id in resolutionById)),
+    [activeItems, resolutionById],
   );
   const reviewKcal = useCountUp(totals.kcal, 450);
   const doneKcal = useCountUp(step === "done" ? confirmedTotalKcal : 0, 1000);
@@ -291,7 +291,7 @@ export function MealWizard({
         setItems(entry.items);
         setGramsById(grams);
         setRemovedIds(new Set());
-        setNameById({});
+        setResolutionById({});
         setQualityOverall(entry.qualityOverall);
         setReviewError(null);
         setStep("review");
@@ -334,7 +334,7 @@ export function MealWizard({
   async function confirmMeal() {
     const id = entryIdRef.current;
 
-    if (!id || activeItems.length === 0 || confirming || unresolvedAmbiguous) {
+    if (!id || activeItems.length === 0 || confirming || hasUnresolved) {
       return;
     }
 
@@ -343,13 +343,13 @@ export function MealWizard({
 
     try {
       // PATCH em lote (não por tecla): grama confirmada + remoções + identidade
-      // escolhida para itens ambíguos.
+      // escolhida (candidato completo: nome + macros) para itens ambíguos.
       await reviewEntry(id, {
         items: items.map((item) => ({
           id: item.id,
           gramsConfirmed: gramsById[item.id] ?? itemGrams(item),
           isRemoved: removedIds.has(item.id),
-          ...(nameById[item.id] ? { name: nameById[item.id] } : {}),
+          ...resolutionEdit(resolutionById[item.id]),
         })),
       });
 
@@ -702,8 +702,10 @@ export function MealWizard({
               <ul className="space-y-3">
                 {items.map((item) => {
                   const removed = removedIds.has(item.id);
+                  const resolution = resolutionById[item.id];
+                  const view = resolvedView(item, resolution);
                   const grams = gramsById[item.id] ?? itemGrams(item);
-                  const macros = itemMacros(item, grams);
+                  const macros = itemMacros(view, grams);
                   const maxGrams = Math.max(Math.round((grams * 2) / 5) * 5, 100);
 
                   return (
@@ -722,7 +724,7 @@ export function MealWizard({
                               removed ? "line-through" : "",
                             ].join(" ")}
                           >
-                            {nameById[item.id] ?? item.name}
+                            {view.name}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             {item.preparation && (
@@ -759,23 +761,28 @@ export function MealWizard({
                         </div>
                       </div>
 
-                      {item.identification === "ambiguous" && item.alternatives.length > 0 && !removed && (
+                      {needsResolution(item) && !removed && (
                         <div className="mt-3 rounded-lg border border-accent/30 bg-accent-muted/40 p-2.5">
                           <p className="flex items-center gap-1.5 text-[11px] font-semibold text-accent">
-                            <AlertTriangle size={12} /> Tipo incerto — confirme qual é:
+                            <AlertTriangle size={12} />
+                            {item.identification === "unknown"
+                              ? "Não identifiquei com certeza — confirme:"
+                              : "Tipo incerto — escolha qual é (muda as calorias):"}
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {[...item.alternatives, "Outro"].map((alt) => {
-                              const chosen = nameById[item.id];
-                              const isOutro = alt === "Outro";
-                              const selected = isOutro ? chosen === item.name : chosen === alt;
+                            {item.alternatives.map((alt) => {
+                              const selected =
+                                resolution?.kind === "alternative" && resolution.alt.name === alt.name;
 
                               return (
                                 <button
-                                  key={alt}
+                                  key={alt.name}
                                   type="button"
                                   onClick={() =>
-                                    setNameById((current) => ({ ...current, [item.id]: isOutro ? item.name : alt }))
+                                    setResolutionById((current) => ({
+                                      ...current,
+                                      [item.id]: { kind: "alternative", alt },
+                                    }))
                                   }
                                   className={[
                                     "rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
@@ -784,10 +791,27 @@ export function MealWizard({
                                       : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
                                   ].join(" ")}
                                 >
-                                  {alt}
+                                  {alt.name}
+                                  <span className={selected ? "ml-1 opacity-80" : "ml-1 text-muted"}>
+                                    {Math.round(alt.kcalPer100g)} kcal/100g
+                                  </span>
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setResolutionById((current) => ({ ...current, [item.id]: { kind: "keep" } }))
+                              }
+                              className={[
+                                "rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+                                resolution?.kind === "keep"
+                                  ? "border-accent bg-accent text-accent-on"
+                                  : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+                              ].join(" ")}
+                            >
+                              {item.identification === "unknown" ? "Manter estimativa" : "Outro / manter"}
+                            </button>
                           </div>
                         </div>
                       )}
@@ -833,7 +857,7 @@ export function MealWizard({
                 </p>
               )}
 
-              {unresolvedAmbiguous && (
+              {hasUnresolved && (
                 <p className="flex items-center gap-1.5 text-[11px] font-medium text-accent" role="alert">
                   <AlertTriangle size={13} /> Escolha o tipo dos itens marcados como incertos para confirmar.
                 </p>
@@ -851,7 +875,7 @@ export function MealWizard({
                 </div>
                 <button
                   type="button"
-                  disabled={activeItems.length === 0 || confirming || unresolvedAmbiguous}
+                  disabled={activeItems.length === 0 || confirming || hasUnresolved}
                   onClick={() => void confirmMeal()}
                   className="inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 >
