@@ -2,20 +2,18 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Camera, Sparkles, Target } from "lucide-react";
+import { ArrowRight, Camera, Flame, Sparkles, Target } from "lucide-react";
 
 import type { FoodDiaryTodayResponse } from "@/bff/modules/foodDiary/types";
 import { getToday } from "@/services/foodDiary/foodDiaryService";
 
-import { BalanceRing } from "./BalanceRing";
-
 /**
- * Bloco do Diário Alimentar na Home do usuário — HERO secundário. Agora usa dados
- * REAIS do dia (GET /api/v1/food-diary/today) com fuso local do cliente.
+ * Bloco do Diário Alimentar na Home do usuário — HERO secundário. Usa o PLANO 2.0
+ * e o HUD (motor planEnergy), NÃO a fórmula/meta legada. Só é renderizado quando o
+ * beta está habilitado (a Home decide via me.foodDiaryEnabled).
  *
- * Fallback seguro: enquanto carrega, ou se a chamada falhar, cai no convite neutro
- * (nunca quebra a Home, nunca mostra número falso). Só é renderizado quando o beta
- * está habilitado (a Home decide isso via me.foodDiaryEnabled).
+ * Fallback seguro: enquanto carrega, ou se falhar, cai no convite neutro (nunca
+ * quebra a Home, nunca mostra número falso).
  */
 type LoadState =
   | { status: "loading" }
@@ -45,33 +43,30 @@ export function DiaryHomeCard() {
     };
   }, []);
 
-  // Loading / error → convite neutro (fallback seguro, sem dados falsos).
   if (state.status !== "ready") {
     return (
       <InviteCard
         icon="sparkles"
-        subtitle="Registre suas refeições por foto e acompanhe seu balanço calórico do dia."
+        subtitle="Registre suas refeições por foto e acompanhe seu objetivo do dia."
       />
     );
   }
 
   const { today } = state;
 
-  // Sem meta definida (primeiro uso).
-  if (!today.target) {
+  // Sem plano (primeiro uso) → convite para configurar o plano.
+  if (today.plan === null || today.hud === null) {
     return (
       <InviteCard
         icon="target"
-        subtitle="Configure sua meta calórica e comece a registrar suas refeições por foto."
+        subtitle="Defina seu plano (objetivo + gasto) e acompanhe se está no caminho hoje."
       />
     );
   }
 
-  const targetKcal = today.target.targetKcal;
-  const consumed = today.totals.consumedKcal;
-  const burned = today.totals.burnedKcal;
-  const remaining = today.totals.remainingKcal ?? targetKcal + burned - consumed;
-  const isOver = remaining < 0;
+  const hud = today.hud;
+  const isAbove = hud.status === "above";
+  const headlineValue = isAbove ? hud.kcalOverBandTop : hud.kcalToBandTop;
   const hasMeals = today.meals.length > 0;
 
   return (
@@ -87,40 +82,26 @@ export function DiaryHomeCard() {
         <ArrowRight size={16} className="text-accent transition-transform group-hover:translate-x-0.5" />
       </div>
 
-      <div className="mt-4 flex items-center gap-5">
-        <BalanceRing
-          consumedKcal={consumed}
-          targetKcal={targetKcal}
-          burnedKcal={burned}
-          burnReferenceKcal={Math.max(burned, 1)}
-          variant="compact"
-        />
+      <p className="mt-3 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-accent">
+        <Flame size={12} strokeWidth={2.4} />
+        {hud.missionLabel}
+      </p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{hud.statusLabel}</p>
 
-        <div className="min-w-0 flex-1">
-          {hasMeals ? (
-            <>
-              <p className="text-sm font-semibold text-foreground">
-                {isOver ? "Você passou da meta de hoje" : "Ainda cabe no seu dia"}
-              </p>
-              <p className="mt-0.5 text-xs text-muted">
-                {consumed.toLocaleString("pt-BR")} de {targetKcal.toLocaleString("pt-BR")} kcal ·{" "}
-                {today.meals.length} {today.meals.length > 1 ? "refeições" : "refeição"}
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-sm font-semibold text-foreground">Meta definida</p>
-              <p className="mt-0.5 text-xs text-muted">
-                Registre sua primeira refeição para começar o dia.
-              </p>
-            </>
-          )}
-
-          <span className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold text-accent-on transition-colors group-hover:bg-accent-hover">
-            {hasMeals ? <Sparkles size={14} /> : <Camera size={14} />}
-            {hasMeals ? "Abrir Diário" : "Registrar refeição"}
-          </span>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="font-display text-2xl font-bold tracking-tight text-foreground">
+            {headlineValue.toLocaleString("pt-BR")}
+          </p>
+          <p className="text-[11px] text-muted">
+            {isAbove ? "kcal acima do topo da faixa" : "kcal até o topo da faixa"}
+          </p>
         </div>
+
+        <span className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold text-accent-on transition-colors group-hover:bg-accent-hover">
+          {hasMeals ? <Sparkles size={14} /> : <Camera size={14} />}
+          {hasMeals ? "Abrir Diário" : "Registrar"}
+        </span>
       </div>
     </Link>
   );

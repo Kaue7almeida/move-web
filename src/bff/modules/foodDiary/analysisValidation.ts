@@ -13,10 +13,33 @@ const MAX_ITEMS = 40;
 const MAX_ITEM_GRAMS = 5000;
 const MAX_TOTAL_KCAL = 12_000;
 
+export type ItemIdentification = "identified" | "ambiguous" | "unknown";
+
+/**
+ * A plausible identity for an ambiguous item, carrying its OWN complete nutrient
+ * profile so picking it in review fully replaces the item's macros — no second AI
+ * call. kcal is recomputed from macros (Atwater), same as the item itself.
+ */
+export type NormalizedAiAlternative = {
+  name: string;
+  kcalPer100g: number;
+  proteinPer100g: number;
+  carbPer100g: number;
+  fatPer100g: number;
+  fiberPer100g: number | null;
+};
+
 export type NormalizedAiItem = {
   name: string;
   preparation: string | null;
   category: string | null;
+  /** Identity certainty (NOT accuracy): identified | ambiguous | unknown. */
+  identification: ItemIdentification;
+  /**
+   * Plausible identities when ambiguous — each a COMPLETE candidate (name + macros),
+   * so human selection swaps the whole nutrient profile without another AI call. [] otherwise.
+   */
+  alternatives: NormalizedAiAlternative[];
   gramsEstimated: number;
   householdMeasure: string | null;
   confidence: number | null;
@@ -44,6 +67,10 @@ export type AnalysisValidationResult =
       items: NormalizedAiItem[];
       estimatedTotals: EstimatedTotals;
       overallConfidence: number | null;
+      /** True when the DESCRIPTION was too vague to estimate honestly (text/snack only). */
+      needsClarification: boolean;
+      /** The single short pt-BR question to ask when needsClarification is true; else null. */
+      clarificationQuestion: string | null;
     }
   | { ok: false; code: string; message: string };
 
@@ -92,6 +119,55 @@ function computeTotals(items: NormalizedAiItem[]): EstimatedTotals {
     fatG: round1(totals.fatG),
     fiberG: round1(totals.fiberG),
   };
+}
+
+/**
+ * Normalize the ambiguity alternatives into COMPLETE candidates. Each alternative
+ * must carry usable macros — those that don't are dropped (never invented). kcal is
+ * recomputed from macros (Atwater), exactly like the item itself, so selecting an
+ * alternative in review swaps a coherent, self-consistent nutrient profile.
+ */
+function normalizeAlternatives(raw: FoodDiaryAiAnalysis["items"][number]["alternatives"]): NormalizedAiAlternative[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: NormalizedAiAlternative[] = [];
+
+  for (const alt of raw) {
+    const name = typeof alt?.name === "string" ? alt.name.trim() : "";
+    const protein = alt?.proteinPer100g;
+    const carb = alt?.carbPer100g;
+    const fat = alt?.fatPer100g;
+    const fiber = alt?.fiberPer100g ?? null;
+
+    if (!name) {
+      continue;
+    }
+
+    if (![protein, carb, fat].every((value) => isFiniteNumber(value) && value >= 0)) {
+      continue;
+    }
+
+    if (fiber !== null && (!isFiniteNumber(fiber) || fiber < 0)) {
+      continue;
+    }
+
+    out.push({
+      name,
+      kcalPer100g: round1(4 * protein + 4 * carb + 9 * fat),
+      proteinPer100g: protein,
+      carbPer100g: carb,
+      fatPer100g: fat,
+      fiberPer100g: fiber,
+    });
+
+    if (out.length >= 8) {
+      break;
+    }
+  }
+
+  return out;
 }
 
 export function validateAndNormalizeAnalysis(
@@ -146,10 +222,14 @@ export function validateAndNormalizeAnalysis(
 
     seen.add(signature);
 
+    const alternatives = normalizeAlternatives(item.alternatives);
+
     normalized.push({
       name,
       preparation: nullableTrimmed(item.preparation),
       category: nullableTrimmed(item.category),
+      identification: item.identification,
+      alternatives,
       gramsEstimated: grams,
       householdMeasure: nullableTrimmed(item.householdMeasure),
       confidence: isFiniteNumber(item.confidence) ? clamp01(item.confidence) : null,
@@ -178,5 +258,7 @@ export function validateAndNormalizeAnalysis(
     items: normalized,
     estimatedTotals,
     overallConfidence: isFiniteNumber(analysis.confidence) ? clamp01(analysis.confidence) : null,
+    needsClarification: Boolean(analysis.needsClarification),
+    clarificationQuestion: nullableTrimmed(analysis.clarificationQuestion),
   };
 }

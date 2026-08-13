@@ -5,11 +5,18 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryItemRecord,
 } from "@/bff/modules/foodDiary/types";
+import type {
+  FoodDiaryPlanRecord,
+  LatestScanTmb,
+  UpsertPlanDbInput,
+} from "@/bff/modules/foodDiary/types/plan";
 
 export type CreateEntryDraftDbInput = {
   studentUserId: string;
   mealType: string;
   loggedAt: string;
+  inputKind: string;
+  textDescription: string | null;
   containerSize: string | null;
   mealOrigin: string | null;
   preparationHint: string | null;
@@ -48,6 +55,8 @@ export type CreateItemDbInput = {
   name: string;
   preparation: string | null;
   category: string | null;
+  identification: string;
+  alternatives: Json;
   gramsEstimated: number;
   gramsConfirmed: number | null;
   householdMeasure: string | null;
@@ -70,6 +79,14 @@ export type UpdateItemDbInput = {
   isRemoved?: boolean;
   name?: string;
   preparation?: string | null;
+  /** Ambiguity resolution: set identity + (optionally) the chosen candidate's macros. */
+  identification?: string;
+  alternatives?: Json;
+  kcalPer100g?: number;
+  proteinPer100g?: number;
+  carbPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number | null;
 };
 
 export type ConfirmEntryDbInput = {
@@ -172,6 +189,22 @@ export interface IFoodDiaryRepository {
     startIso: string,
     endIso: string,
   ): Promise<ActivityEnergyEntryRecord[]>;
+
+  // ── food_diary_plans (versioned) ──
+  /** The user's single ACTIVE plan version, or null (ownership by profiles.id). */
+  findActivePlan(userId: string): Promise<FoodDiaryPlanRecord | null>;
+  /**
+   * Atomic versioned upsert (RPC): first plan → insert; same-day edit → update
+   * in place; later-day edit → archive current + insert new active version.
+   */
+  upsertPlanVersioned(input: UpsertPlanDbInput): Promise<FoodDiaryPlanRecord>;
+  /**
+   * All plan versions (active + archived) with effective_from <= dateString,
+   * ordered effective_from desc — so History can pick the version valid per day.
+   */
+  listPlansEffectiveUpTo(userId: string, dateString: string): Promise<FoodDiaryPlanRecord[]>;
+  /** Latest completed MoveScan for the user (for the TMB suggestion), or null. */
+  findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null>;
 
   // ── storage: food-diary-photos (private bucket) ──
   uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void>;

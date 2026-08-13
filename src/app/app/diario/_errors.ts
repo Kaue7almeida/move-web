@@ -71,6 +71,20 @@ const BY_CODE: Record<string, FoodDiaryErrorInfo> = {
     retryable: true,
   },
 
+  /* Texto/descrição não interpretável */
+  food_diary_text_rejected: {
+    title: "Não entendi a descrição",
+    message: "Tente detalhar melhor o que você comeu (itens e quantidades).",
+    retake: false,
+    retryable: true,
+  },
+  food_diary_text_required: {
+    title: "Descrição necessária",
+    message: "Descreva o que você comeu para continuar.",
+    retake: false,
+    retryable: false,
+  },
+
   /* Foto inválida no upload */
   food_diary_photo_too_large: {
     title: "Foto muito grande",
@@ -88,6 +102,20 @@ const BY_CODE: Record<string, FoodDiaryErrorInfo> = {
     title: "Foto necessária",
     message: "Envie a foto do prato para continuar.",
     retake: true,
+    retryable: false,
+  },
+
+  /* Revisão: identidade ambígua não resolvida (o front normalmente já bloqueia) */
+  food_diary_items_unresolved: {
+    title: "Escolha o tipo dos itens",
+    message: "Alguns itens ficaram com identidade incerta. Escolha um candidato (ou remova o item) antes de confirmar.",
+    retake: false,
+    retryable: false,
+  },
+  food_diary_item_resolution_invalid: {
+    title: "Não consegui aplicar a escolha",
+    message: "A escolha do item ficou inconsistente. Selecione um candidato novamente.",
+    retake: false,
     retryable: false,
   },
 

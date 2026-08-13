@@ -295,6 +295,8 @@ type FoodDiaryEntriesRow = {
   hidden_ingredients: Json;
   is_shared_portion: boolean;
   user_notes: string | null;
+  input_kind: string;
+  text_description: string | null;
   idempotency_key: string | null;
   ai_result: Json;
   ai_model: string | null;
@@ -319,6 +321,25 @@ type FoodDiaryEntriesRow = {
   updated_at: string;
 };
 
+type FoodDiaryPlansRow = {
+  id: string;
+  user_id: string;
+  status: string;
+  effective_from: string;
+  superseded_at: string | null;
+  goal: string;
+  tmb_kcal: number;
+  tmb_source: string;
+  tmb_input: Json;
+  scan_id: string | null;
+  routine_level: string;
+  routine_factor: number;
+  planned_balance_kcal: number;
+  tolerance_kcal: number;
+  created_at: string;
+  updated_at: string;
+};
+
 type FoodDiaryItemsRow = {
   id: string;
   entry_id: string;
@@ -326,6 +347,8 @@ type FoodDiaryItemsRow = {
   name: string;
   preparation: string | null;
   category: string | null;
+  identification: string;
+  alternatives: Json;
   grams_estimated: number;
   grams_confirmed: number | null;
   household_measure: string | null;
@@ -943,6 +966,8 @@ export type Database = {
           hidden_ingredients?: Json;
           is_shared_portion?: boolean;
           user_notes?: string | null;
+          input_kind?: string;
+          text_description?: string | null;
           idempotency_key?: string | null;
           ai_result?: Json;
           ai_model?: string | null;
@@ -972,6 +997,8 @@ export type Database = {
           status?: string;
           meal_type?: string;
           logged_at?: string;
+          input_kind?: string;
+          text_description?: string | null;
           photo_storage_path?: string | null;
           photo_content_type?: string | null;
           container_size?: string | null;
@@ -1013,6 +1040,8 @@ export type Database = {
           name: string;
           preparation?: string | null;
           category?: string | null;
+          identification?: string;
+          alternatives?: Json;
           grams_estimated: number;
           grams_confirmed?: number | null;
           household_measure?: string | null;
@@ -1038,6 +1067,8 @@ export type Database = {
           name?: string;
           preparation?: string | null;
           category?: string | null;
+          identification?: string;
+          alternatives?: Json;
           grams_estimated?: number;
           grams_confirmed?: number | null;
           household_measure?: string | null;
@@ -1109,9 +1140,65 @@ export type Database = {
           updated_at?: string;
         }
       >;
+      food_diary_plans: TableDefinition<
+        FoodDiaryPlansRow,
+        {
+          id?: string;
+          user_id: string;
+          status?: string;
+          effective_from: string;
+          superseded_at?: string | null;
+          goal: string;
+          tmb_kcal: number;
+          tmb_source: string;
+          tmb_input?: Json;
+          scan_id?: string | null;
+          routine_level: string;
+          routine_factor: number;
+          planned_balance_kcal?: number;
+          tolerance_kcal: number;
+          created_at?: string;
+          updated_at?: string;
+        },
+        {
+          id?: string;
+          user_id?: string;
+          status?: string;
+          effective_from?: string;
+          superseded_at?: string | null;
+          goal?: string;
+          tmb_kcal?: number;
+          tmb_source?: string;
+          tmb_input?: Json;
+          scan_id?: string | null;
+          routine_level?: string;
+          routine_factor?: number;
+          planned_balance_kcal?: number;
+          tolerance_kcal?: number;
+          created_at?: string;
+          updated_at?: string;
+        }
+      >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      food_diary_upsert_plan: {
+        Args: {
+          p_user_id: string;
+          p_today: string;
+          p_goal: string;
+          p_tmb_kcal: number;
+          p_tmb_source: string;
+          p_tmb_input: Json;
+          p_scan_id: string | null;
+          p_routine_level: string;
+          p_routine_factor: number;
+          p_planned_balance_kcal: number;
+          p_tolerance_kcal: number;
+        };
+        Returns: FoodDiaryPlansRow;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

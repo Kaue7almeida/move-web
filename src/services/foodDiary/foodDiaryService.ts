@@ -11,6 +11,7 @@ import type {
   ReviewEntryInput,
   UpsertCalorieTargetInput,
 } from "@/bff/modules/foodDiary/types";
+import type { FoodDiaryPlanResponse, UpsertPlanInput } from "@/bff/modules/foodDiary/types/plan";
 import { authenticatedFetch } from "@/services/api/authenticatedFetch";
 
 /* ─── Error carrying the backend error.code ─────────────────────────────────── */
@@ -106,6 +107,32 @@ export async function getEntry(entryId: string): Promise<FoodDiaryEntryResponse>
   return (await response.json()) as FoodDiaryEntryResponse;
 }
 
+/* ─── Energy plan (Diário 2.0) ──────────────────────────────────────────────── */
+
+export async function getPlan(): Promise<FoodDiaryPlanResponse> {
+  const response = await authenticatedFetch("/api/v1/food-diary/plan", { method: "GET" });
+
+  if (!response.ok) {
+    await throwFoodDiaryApiError(response, "Não foi possível carregar seu plano.");
+  }
+
+  return (await response.json()) as FoodDiaryPlanResponse;
+}
+
+export async function upsertPlan(input: UpsertPlanInput): Promise<FoodDiaryPlanResponse> {
+  const response = await authenticatedFetch("/api/v1/food-diary/plan", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timeZone: clientTimeZone(), ...input }),
+  });
+
+  if (!response.ok) {
+    await throwFoodDiaryApiError(response, "Não foi possível salvar seu plano.");
+  }
+
+  return (await response.json()) as FoodDiaryPlanResponse;
+}
+
 /* ─── Target & activities ───────────────────────────────────────────────────── */
 
 export async function upsertTarget(
@@ -185,11 +212,17 @@ export async function uploadEntryPhoto(
   return (await response.json()) as FoodDiaryPhotoResponse;
 }
 
-export async function analyzeEntry(entryId: string): Promise<FoodDiaryEntryResponse> {
+export async function analyzeEntry(
+  entryId: string,
+  options?: { skipClarification?: boolean },
+): Promise<FoodDiaryEntryResponse> {
   const response = await authenticatedFetch(`/api/v1/food-diary/entries/${entryId}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ timeZone: clientTimeZone() }),
+    body: JSON.stringify({
+      timeZone: clientTimeZone(),
+      ...(options?.skipClarification ? { skipClarification: true } : {}),
+    }),
   });
 
   if (!response.ok) {

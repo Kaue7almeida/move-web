@@ -1,19 +1,16 @@
 "use client";
 
 import { useMemo } from "react";
-import { CalendarCheck, Flame, TrendingDown, TrendingUp } from "lucide-react";
+import { CalendarCheck, Flame, TrendingUp } from "lucide-react";
 
-import type { FoodDiaryHistoryDay } from "@/bff/modules/foodDiary/types";
+import type { FoodDiaryHistoryDay, FoodDiaryHistoryStatus } from "@/bff/modules/foodDiary/types";
 
 import { formatKcal } from "../_content";
 
 /**
- * Histórico do Diário — P1: consumo vs. meta por dia (7 dias), balanço do período
- * e dias dentro da meta, com DADOS REAIS (GET /api/v1/food-diary/history).
- *
- * Deliberadamente SEM "variação estimada de peso": ficou fora do P1 por risco de
- * falsa precisão (erro da estimativa por foto composto com a conversão genérica
- * de ~7700 kcal/kg). Ver docs/diario-alimentar/07, seção 13.
+ * Histórico 2.0 — mesma lógica do Hoje: cada dia é classificado contra a FAIXA-ALVO
+ * do PLANO que valia naquele dia (não a meta legada). Sem "déficit": status é
+ * abaixo / dentro / acima / incompleto (sem plano no dia).
  */
 export function DiaryHistory({ days }: { days: FoodDiaryHistoryDay[] }) {
   const rows = useMemo(
@@ -28,14 +25,14 @@ export function DiaryHistory({ days }: { days: FoodDiaryHistoryDay[] }) {
   );
 
   const stats = useMemo(() => {
-    const withBalance = rows.filter((day) => day.balanceKcal !== null);
-    const totalBalance = withBalance.reduce((acc, day) => acc + (day.balanceKcal ?? 0), 0);
+    const withPlan = rows.filter((day) => day.status !== "incomplete");
+    const daysWithin = rows.filter((day) => day.status === "within").length;
+    const daysAbove = rows.filter((day) => day.status === "above").length;
     const averageConsumed = Math.round(
       rows.reduce((acc, day) => acc + day.consumedKcal, 0) / Math.max(rows.length, 1),
     );
-    const daysOnTarget = withBalance.filter((day) => (day.balanceKcal ?? 0) <= 0).length;
 
-    return { totalBalance, averageConsumed, daysOnTarget };
+    return { daysWithin, daysAbove, averageConsumed, plannedDays: withPlan.length };
   }, [rows]);
 
   if (rows.length === 0) {
@@ -46,26 +43,18 @@ export function DiaryHistory({ days }: { days: FoodDiaryHistoryDay[] }) {
     );
   }
 
-  const isDeficit = stats.totalBalance <= 0;
-  const referenceTarget =
-    rows[rows.length - 1]?.targetKcal ??
-    Math.max(0, ...rows.map((day) => day.targetKcal ?? 0));
-  const chartMax = Math.max(
-    ...rows.map((day) => day.consumedKcal),
-    referenceTarget,
-    1,
-  ) * 1.1;
+  const scaleMax =
+    Math.max(...rows.map((day) => Math.max(day.consumedKcal, day.bandHighKcal ?? 0)), 1) * 1.1;
 
   return (
     <div className="space-y-4">
-      {/* Resumo do período */}
+      {/* Resumo do período (sem "déficit") */}
       <div className="grid grid-cols-3 gap-2 sm:gap-3">
         <SummaryCard
-          tone={isDeficit ? "success" : "accent"}
-          icon={isDeficit ? TrendingDown : TrendingUp}
-          value={`${stats.totalBalance > 0 ? "+" : ""}${formatKcal(stats.totalBalance)}`}
-          unit="kcal"
-          label={isDeficit ? "Déficit no período" : "Superávit no período"}
+          tone="success"
+          icon={CalendarCheck}
+          value={`${stats.daysWithin}/${rows.length}`}
+          label="Dias na faixa"
         />
         <SummaryCard
           tone="neutral"
@@ -76,85 +65,74 @@ export function DiaryHistory({ days }: { days: FoodDiaryHistoryDay[] }) {
         />
         <SummaryCard
           tone="accent"
-          icon={CalendarCheck}
-          value={`${stats.daysOnTarget}/${rows.length}`}
-          label="Dias na meta"
+          icon={TrendingUp}
+          value={`${stats.daysAbove}`}
+          label="Dias acima"
         />
       </div>
 
-      {/* Gráfico: consumo por dia vs. meta */}
+      {/* Gráfico: consumo por dia dentro/fora da faixa do plano */}
       <section className="dia-rise rounded-2xl border border-border bg-surface p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <h3 className="text-sm font-bold text-foreground">Consumo por dia</h3>
+          <h3 className="text-sm font-bold text-foreground">Consumo vs. sua faixa</h3>
           <p className="text-[11px] text-muted">
-            média {formatKcal(stats.averageConsumed)} kcal{referenceTarget > 0 ? " · linha = meta" : ""}
+            {stats.plannedDays < rows.length ? "área = faixa-alvo do dia" : "área = faixa-alvo"}
           </p>
         </div>
 
-        <div className="relative mt-4">
-          {referenceTarget > 0 && (
-            <div
-              className="absolute inset-x-0 border-t border-dashed border-foreground/30"
-              style={{ bottom: `${(referenceTarget / chartMax) * 100}%` }}
-              aria-hidden="true"
-            />
-          )}
+        <div className="mt-4 flex h-36 items-end gap-1.5">
+          {rows.map((day, index) => {
+            const consumedHeight = Math.min((day.consumedKcal / scaleMax) * 100, 100);
+            const hasBand = day.bandLowKcal !== null && day.bandHighKcal !== null;
+            const bandBottom = hasBand ? ((day.bandLowKcal ?? 0) / scaleMax) * 100 : 0;
+            const bandHeight = hasBand
+              ? (((day.bandHighKcal ?? 0) - (day.bandLowKcal ?? 0)) / scaleMax) * 100
+              : 0;
 
-          <div className="flex h-36 items-end gap-1.5">
-            {rows.map((day, index) => {
-              const heightPercent = Math.min((day.consumedKcal / chartMax) * 100, 100);
-              const isOver = day.balanceKcal !== null && day.balanceKcal > 0;
-
-              return (
-                <div
-                  key={day.date}
-                  className="group relative flex h-full flex-1 flex-col items-center justify-end"
-                  title={`${day.dateLabel} · ${day.consumedKcal} kcal consumidas · ${day.burnedKcal} gastas`}
-                >
-                  <div
-                    className={[
-                      "dia-grow-y w-full rounded-t-md transition-colors",
-                      day.isToday
-                        ? "bg-accent shadow-[0_0_14px_rgba(242,106,27,0.4)]"
-                        : isOver
-                          ? "bg-accent/40 group-hover:bg-accent/60"
-                          : "bg-success/45 group-hover:bg-success/65",
-                    ].join(" ")}
-                    style={{ height: `${heightPercent}%`, animationDelay: `${index * 45}ms` }}
-                  />
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-1.5 flex gap-1.5">
-            {rows.map((day) => (
-              <p
+            return (
+              <div
                 key={day.date}
-                className={[
-                  "flex-1 text-center text-[9px] font-medium leading-none",
-                  day.isToday ? "font-bold text-accent" : "text-muted",
-                ].join(" ")}
+                className="group relative flex h-full flex-1 flex-col items-center justify-end"
+                title={`${day.dateLabel} · ${day.consumedKcal} kcal · ${statusLabel(day.status)}`}
               >
-                {day.isToday ? "hoje" : day.weekdayLabel}
-              </p>
-            ))}
-          </div>
+                {hasBand && (
+                  <div
+                    className="absolute inset-x-0 rounded-sm bg-success/20"
+                    style={{ bottom: `${bandBottom}%`, height: `${bandHeight}%` }}
+                    aria-hidden="true"
+                  />
+                )}
+                <div
+                  className={[
+                    "dia-grow-y relative w-full rounded-t-md transition-colors",
+                    barClass(day.status, day.isToday),
+                  ].join(" ")}
+                  style={{ height: `${consumedHeight}%`, animationDelay: `${index * 45}ms` }}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-1.5 flex gap-1.5">
+          {rows.map((day) => (
+            <p
+              key={day.date}
+              className={[
+                "flex-1 text-center text-[9px] font-medium leading-none",
+                day.isToday ? "font-bold text-accent" : "text-muted",
+              ].join(" ")}
+            >
+              {day.isToday ? "hoje" : day.weekdayLabel}
+            </p>
+          ))}
         </div>
 
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
-          <span>
-            <span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-success/45" />
-            dentro da meta
-          </span>
-          <span>
-            <span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-accent/40" />
-            acima da meta
-          </span>
-          <span>
-            <span className="mr-1.5 inline-block h-2 w-2 rounded-sm bg-accent" />
-            hoje
-          </span>
+          <Legend className="bg-success" label="dentro da faixa" />
+          <Legend className="bg-accent/50" label="abaixo" />
+          <Legend className="bg-accent" label="acima" />
+          <Legend className="bg-surface-strong" label="sem plano" />
         </div>
       </section>
 
@@ -162,46 +140,83 @@ export function DiaryHistory({ days }: { days: FoodDiaryHistoryDay[] }) {
       <section className="dia-rise">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Dia a dia</h3>
         <ul className="mt-3 space-y-2">
-          {[...rows].reverse().map((day) => {
-            const hasBalance = day.balanceKcal !== null;
-            const balance = day.balanceKcal ?? 0;
-            const isOver = balance > 0;
-
-            return (
-              <li
-                key={day.date}
-                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="w-12 text-xs font-bold capitalize text-foreground">
-                    {day.isToday ? "Hoje" : day.weekdayLabel}
-                  </span>
-                  <span className="text-xs text-muted">{day.dateLabel}</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-muted">{formatKcal(day.consumedKcal)} kcal</span>
-                  {hasBalance ? (
-                    <span
-                      className={[
-                        "rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums",
-                        isOver ? "bg-accent-soft text-accent" : "bg-success-soft text-success",
-                      ].join(" ")}
-                    >
-                      {isOver ? "+" : ""}
-                      {formatKcal(balance)}
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold text-muted">
-                      sem meta
-                    </span>
-                  )}
-                </div>
-              </li>
-            );
-          })}
+          {[...rows].reverse().map((day) => (
+            <li
+              key={day.date}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-12 text-xs font-bold capitalize text-foreground">
+                  {day.isToday ? "Hoje" : day.weekdayLabel}
+                </span>
+                <span className="text-xs text-muted">{day.dateLabel}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted">
+                  {formatKcal(day.consumedKcal)} kcal
+                  {day.consumedProteinG > 0 ? ` · P ${Math.round(day.consumedProteinG)}g` : ""}
+                </span>
+                <StatusBadge status={day.status} />
+              </div>
+            </li>
+          ))}
         </ul>
       </section>
     </div>
+  );
+}
+
+/* ─── bits ─── */
+
+function barClass(status: FoodDiaryHistoryStatus, isToday: boolean): string {
+  if (status === "incomplete") {
+    return "bg-surface-strong";
+  }
+  if (status === "within") {
+    return isToday ? "bg-success shadow-[0_0_12px_rgba(52,199,89,0.35)]" : "bg-success/80";
+  }
+  if (status === "above") {
+    return isToday ? "bg-accent shadow-[0_0_12px_rgba(242,106,27,0.4)]" : "bg-accent/70";
+  }
+  return "bg-accent/40"; // below
+}
+
+function statusLabel(status: FoodDiaryHistoryStatus): string {
+  switch (status) {
+    case "within":
+      return "dentro da faixa";
+    case "above":
+      return "acima da faixa";
+    case "below":
+      return "abaixo da faixa";
+    case "incomplete":
+      return "sem plano";
+  }
+}
+
+function StatusBadge({ status }: { status: FoodDiaryHistoryStatus }) {
+  const tone =
+    status === "within"
+      ? "bg-success-soft text-success"
+      : status === "above"
+        ? "bg-accent-soft text-accent"
+        : status === "below"
+          ? "bg-accent-muted text-accent"
+          : "bg-surface-strong text-muted";
+
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${tone}`}>
+      {status === "within" ? "Dentro" : status === "above" ? "Acima" : status === "below" ? "Abaixo" : "—"}
+    </span>
+  );
+}
+
+function Legend({ className, label }: { className: string; label: string }) {
+  return (
+    <span>
+      <span className={`mr-1.5 inline-block h-2 w-2 rounded-sm ${className}`} />
+      {label}
+    </span>
   );
 }
 
@@ -239,15 +254,13 @@ function SummaryCard({
   );
 }
 
-/* ─── Helpers de data (a data é um dia-calendário YYYY-MM-DD) ─────────────────── */
+/* ─── date helpers (a data é um dia-calendário YYYY-MM-DD) ─── */
 
 function weekdayLabel(dateStr: string): string {
   const date = new Date(`${dateStr}T12:00:00Z`);
-
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-
   return new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" })
     .format(date)
     .replace(".", "");
@@ -255,10 +268,8 @@ function weekdayLabel(dateStr: string): string {
 
 function dayMonthLabel(dateStr: string): string {
   const date = new Date(`${dateStr}T12:00:00Z`);
-
   if (Number.isNaN(date.getTime())) {
     return dateStr;
   }
-
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(date);
 }

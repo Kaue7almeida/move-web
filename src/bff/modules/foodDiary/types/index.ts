@@ -1,4 +1,5 @@
 import type { Database, Json } from "@/bff/core/supabase/database.types";
+import type { FoodDiaryHud, FoodDiaryPlanView } from "@/bff/modules/foodDiary/types/plan";
 
 /* ─── Persistence records (snake_case, from DB) ─────────────────────────────── */
 
@@ -56,10 +57,16 @@ export type CreateActivityInput = {
   loggedAt?: string;
 };
 
+export type EntryInputKind = "photo" | "text" | "snack";
+
 export type CreateEntryDraftInput = {
   mealType: MealType;
   /** ISO timestamp the meal counts under. Defaults to now. */
   loggedAt?: string;
+  /** How the meal is described: photo (default), free text, or snack. */
+  inputKind?: EntryInputKind;
+  /** Free-text description for text/snack entries. */
+  textDescription?: string;
   containerSize?: ContainerSize;
   mealOrigin?: MealOrigin;
   preparationHint?: string;
@@ -72,15 +79,36 @@ export type CreateEntryDraftInput = {
 export type AnalyzeEntryInput = {
   /** IANA time zone used to resolve the entry's local day for the daily quota. */
   timeZone?: string;
+  /**
+   * Text/snack only: when true, a vague description is accepted as a best estimate
+   * instead of raising food_diary_needs_clarification again. The UI sets this on the
+   * re-analysis after the user answered the single clarification question.
+   */
+  skipClarification?: boolean;
 };
 
-/** A human edit to a detected item during review. Absent fields are left unchanged. */
+/**
+ * A human edit to a detected item during review. Absent fields are left unchanged.
+ *
+ * Resolving an AMBIGUOUS identity (picking one of the alternatives, or "Outro")
+ * is a coherent swap: the client sends the chosen name AND its full per-100g
+ * nutrients, plus identification="identified". Sending a nutrient field requires
+ * identification="identified" — the backend rejects a nutrient change that leaves
+ * the item ambiguous (an inconsistent state).
+ */
 export type ReviewItemEdit = {
   id: string;
   gramsConfirmed?: number | null;
   isRemoved?: boolean;
   name?: string;
   preparation?: string | null;
+  /** Resolution of an ambiguous/unknown identity. Only "identified" is accepted. */
+  identification?: "identified";
+  kcalPer100g?: number;
+  proteinPer100g?: number;
+  carbPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number | null;
 };
 
 /** A manual item added during review (P1 has no TACO/USDA — values come from the payload). */
@@ -114,6 +142,20 @@ export type CalorieTargetView = {
   source: string;
 };
 
+/**
+ * A plausible identity for an ambiguous item, carrying its OWN complete nutrient
+ * profile. Picking it in review swaps the item's whole profile (name + macros) with
+ * no second AI call. kcal is derived from macros, same as the item.
+ */
+export type FoodDiaryItemAlternative = {
+  name: string;
+  kcalPer100g: number;
+  proteinPer100g: number;
+  carbPer100g: number;
+  fatPer100g: number;
+  fiberPer100g: number | null;
+};
+
 export type FoodDiaryItemView = {
   id: string;
   entryId: string;
@@ -121,6 +163,10 @@ export type FoodDiaryItemView = {
   name: string;
   preparation: string | null;
   category: string | null;
+  /** Identity certainty: identified | ambiguous | unknown. */
+  identification: string;
+  /** Complete candidate identities when ambiguous (name + macros); [] otherwise. */
+  alternatives: FoodDiaryItemAlternative[];
   gramsEstimated: number;
   gramsConfirmed: number | null;
   householdMeasure: string | null;
@@ -200,19 +246,37 @@ export type FoodDiaryTodayResponse = {
   /** The diary day these data belong to (YYYY-MM-DD, server UTC unless overridden). */
   date: string;
   target: CalorieTargetView | null;
+  /** The user's active energy plan (Diário 2.0), or null when not configured yet. */
+  plan: FoodDiaryPlanView | null;
+  /** The daily HUD ("estou seguindo meu objetivo hoje?"), null without a plan. */
+  hud: FoodDiaryHud | null;
   /** Confirmed meals of the day (only confirmed entries feed the diary). */
   meals: FoodDiaryEntryView[];
   activities: ActivityEnergyView[];
   totals: DayTotals;
 };
 
+/** below/within/above the band; "incomplete" when no plan version covered the day. */
+export type FoodDiaryHistoryStatus = "below" | "within" | "above" | "incomplete";
+
+/**
+ * History 2.0 — same energy engine as Today, driven by the plan version that was
+ * effective on each day (not the legacy daily_calorie_targets). No "déficit"
+ * framing: a day is classified vs. its own target band.
+ */
 export type FoodDiaryHistoryDay = {
   date: string;
   consumedKcal: number;
+  consumedProteinG: number;
   burnedKcal: number;
-  targetKcal: number | null;
-  /** consumed − (target + burned), or null when no target is in force. */
-  balanceKcal: number | null;
+  status: FoodDiaryHistoryStatus;
+  /** The plan goal in force that day, or null when there was no plan. */
+  goal: string | null;
+  gastoDiaKcal: number | null;
+  alvoCentralKcal: number | null;
+  bandLowKcal: number | null;
+  bandHighKcal: number | null;
+  plannedBalanceKcal: number | null;
 };
 
 export type FoodDiaryHistoryResponse = {

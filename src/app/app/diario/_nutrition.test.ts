@@ -20,6 +20,8 @@ function makeItem(overrides: Partial<FoodDiaryItemView> = {}): FoodDiaryItemView
     name: "Arroz",
     preparation: null,
     category: "carboidrato",
+    identification: "identified",
+    alternatives: [],
     gramsEstimated: 100,
     gramsConfirmed: null,
     householdMeasure: null,

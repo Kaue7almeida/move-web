@@ -3,7 +3,6 @@
 import { useState } from "react";
 import {
   Activity,
-  Camera,
   Check,
   ChevronDown,
   Flame,
@@ -22,6 +21,7 @@ import type {
   FoodDiaryTodayResponse,
   MealType,
 } from "@/bff/modules/foodDiary/types";
+import type { FoodDiaryHud } from "@/bff/modules/foodDiary/types/plan";
 import { addActivity, deleteEntry, removeActivity, upsertTarget } from "@/services/foodDiary/foodDiaryService";
 
 import { DIARY_DISCLAIMER, MEAL_LABELS, QUICK_ACTIVITIES, SUGGESTED_TARGET_KCAL } from "../_content";
@@ -34,15 +34,22 @@ import {
 } from "../_nutrition";
 import { BalanceRing, useCountUp } from "./BalanceRing";
 import { DayTrail, MealIcon } from "./bits";
+import { QuickRegister } from "./QuickRegister";
 
 type DiaryTodayProps = {
   today: FoodDiaryTodayResponse;
   onStartMeal: (meal: MealType) => void;
   /** Re-busca o dia após uma mutação (a página é a fonte de verdade). */
   onRefresh: () => void;
+  /**
+   * When a plan/HUD is active (Diário 2.0), the page renders the HUD above and
+   * this component drops its legacy target-based hero + target editor — showing
+   * only the day management (trilha, refeições, atividades).
+   */
+  hud?: FoodDiaryHud | null;
 };
 
-export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
+export function DiaryToday({ today, onStartMeal, onRefresh, hud = null }: DiaryTodayProps) {
   const { totals, meals, activities } = today;
 
   // Ações reais: cada mutação chama o BFF e, ao concluir, dispara onRefresh().
@@ -51,11 +58,12 @@ export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
     onRefresh();
   };
 
-  if (today.target === null) {
+  // Legacy first-use (no plan and no target): keep the simple target setup.
+  if (today.target === null && !hud) {
     return <TargetSetup onSetTarget={setTarget} />;
   }
 
-  const targetKcal = today.target.targetKcal;
+  const targetKcal = today.target?.targetKcal ?? hud?.alvoCentralKcal ?? 0;
   const macroTargets = macroTargetsForKcal(targetKcal);
   const consumedMacros = {
     proteinG: totals.consumedProteinG,
@@ -78,7 +86,8 @@ export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
 
   return (
     <div className="space-y-6">
-      {/* Hero: anel + métricas + macros */}
+      {/* Hero legado (anel + métricas + macros) — só sem HUD 2.0 (o HUD cobre isso) */}
+      {!hud && (
       <section className="dia-rise overflow-hidden rounded-2xl border border-border bg-surface p-5 sm:p-6">
         <div className="grid items-center gap-6 sm:grid-cols-[auto_1fr] sm:gap-8">
           <BalanceRing
@@ -104,6 +113,7 @@ export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
           </div>
         </div>
       </section>
+      )}
 
       {/* Trilha do dia */}
       <section className="dia-rise rounded-2xl border border-border bg-surface p-5">
@@ -121,15 +131,8 @@ export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
         <DayTrail loggedMeals={loggedMeals} kcalByMeal={kcalByMeal} onPickMeal={onStartMeal} />
       </section>
 
-      {/* CTA principal */}
-      <button
-        type="button"
-        onClick={() => onStartMeal(suggestMealByHour())}
-        className="dia-rise flex w-full items-center justify-center gap-2.5 rounded-2xl bg-accent px-6 py-4 text-sm font-bold text-accent-on shadow-[0_8px_30px_rgba(242,106,27,0.28)] transition-all hover:bg-accent-hover"
-      >
-        <Camera size={18} strokeWidth={2} />
-        Registrar refeição com foto
-      </button>
+      {/* CTA universal: + Registrar (foto / texto / docinho / atividade) */}
+      <QuickRegister onStartPhoto={() => onStartMeal(suggestMealByHour())} onSaved={onRefresh} />
 
       {/* Refeições do dia */}
       <MealsSection
@@ -153,8 +156,8 @@ export function DiaryToday({ today, onStartMeal, onRefresh }: DiaryTodayProps) {
         }}
       />
 
-      {/* Meta diária */}
-      <TargetSection targetKcal={targetKcal} onSetTarget={setTarget} />
+      {/* Meta diária (legado) — só sem HUD 2.0 (o plano define a faixa) */}
+      {!hud && <TargetSection targetKcal={targetKcal} onSetTarget={setTarget} />}
 
       <p className="text-[11px] leading-relaxed text-muted">{DIARY_DISCLAIMER}</p>
     </div>

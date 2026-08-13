@@ -8,6 +8,32 @@ import {
   localDayWindow,
   resolveTimeZone,
 } from "@/bff/modules/foodDiary/diaryDay";
+import {
+  asGoal,
+  asRoutineLevel,
+  asTmbSource,
+  classifyConsumption,
+  computeEnergyPlan,
+  estimateTmbFromLeanMass,
+  GOAL_LABELS,
+  kcalOverBandTop,
+  kcalToBandTop,
+  missionLabelFor,
+  ROUTINE_LEVEL_LABELS,
+  statusLabelFor,
+} from "@/bff/modules/foodDiary/planEnergy";
+import { resolvePlanInputs, selectPlanVersionForDay } from "@/bff/modules/foodDiary/planBuild";
+import { isUnresolvedIdentity, resolveItemIdentity } from "@/bff/modules/foodDiary/reviewResolution";
+import type {
+  FoodDiaryHud,
+  FoodDiaryPlanRecord,
+  FoodDiaryPlanResponse,
+  FoodDiaryPlanView,
+  LatestScanTmb,
+  PlanTmbSnapshot,
+  TmbSuggestion,
+  UpsertPlanInput,
+} from "@/bff/modules/foodDiary/types/plan";
 import type { OpenAiFoodDiaryClient } from "@/bff/modules/foodDiary/infra/OpenAiFoodDiaryClient";
 import type { FoodDiaryAiResponse } from "@/bff/modules/foodDiary/types/ai";
 import type { CurrentUserIdentity } from "@/bff/modules/profile/types";
@@ -30,7 +56,9 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryEntryResponse,
   FoodDiaryEntryView,
+  FoodDiaryHistoryDay,
   FoodDiaryHistoryResponse,
+  FoodDiaryItemAlternative,
   FoodDiaryItemRecord,
   FoodDiaryItemView,
   FoodDiaryPhotoResponse,
@@ -77,8 +105,9 @@ export class FoodDiaryService {
     const day = resolveLocalDay(options.date, timeZone);
     const { startIso, endIso } = localDayWindow(day, timeZone);
 
-    const [targetRecord, entries, activities] = await Promise.all([
+    const [targetRecord, planRecord, entries, activities] = await Promise.all([
       this.foodDiaryRepository.findCurrentTargetForDate(identity.userId, day),
+      this.foodDiaryRepository.findActivePlan(identity.userId),
       this.foodDiaryRepository.listConfirmedEntriesInRange(identity.userId, startIso, endIso),
       this.foodDiaryRepository.listActivitiesInRange(identity.userId, startIso, endIso),
     ]);
@@ -100,9 +129,14 @@ export class FoodDiaryService {
       ? roundKcal(target.targetKcal + burnedKcal - consumed.kcal)
       : null;
 
+    const plan = planRecord ? mapPlanToView(planRecord) : null;
+    const hud = planRecord ? buildHud(planRecord, consumed.kcal, burnedKcal) : null;
+
     return {
       date: day,
       target,
+      plan,
+      hud,
       meals,
       activities: activityViews,
       totals: {
@@ -114,6 +148,55 @@ export class FoodDiaryService {
         burnedKcal,
         remainingKcal,
       },
+    };
+  }
+
+  /* ─── Energy plan (Diário 2.0) ─── */
+
+  async getPlan(identity: CurrentUserIdentity): Promise<FoodDiaryPlanResponse> {
+    const [planRecord, latestScan] = await Promise.all([
+      this.foodDiaryRepository.findActivePlan(identity.userId),
+      this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId),
+    ]);
+
+    return {
+      plan: planRecord ? mapPlanToView(planRecord) : null,
+      tmbSuggestion: buildTmbSuggestion(latestScan, planRecord),
+    };
+  }
+
+  async upsertPlan(
+    identity: CurrentUserIdentity,
+    input: UpsertPlanInput,
+  ): Promise<FoodDiaryPlanResponse> {
+    // Scan-sourced TMB is read server-side (client numbers are never trusted).
+    const scan =
+      input.tmbSource === "scan"
+        ? await this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId)
+        : null;
+
+    const resolved = resolvePlanInputs(input, scan);
+
+    if (!resolved.ok) {
+      throw new ApiError(422, resolved.code, resolved.message);
+    }
+
+    // Versioned upsert: the RPC archives the previous version (later-day change)
+    // or updates in place (same-day edit) atomically. effective_from = local day.
+    const today = resolveLocalDay(undefined, resolveTimeZone(input.timeZone));
+    const saved = await this.foodDiaryRepository.upsertPlanVersioned({
+      userId: identity.userId,
+      today,
+      goal: input.goal,
+      ...resolved.value,
+    });
+
+    const latestScan =
+      scan ?? (await this.foodDiaryRepository.findLatestScanTmbForUser(identity.userId));
+
+    return {
+      plan: mapPlanToView(saved),
+      tmbSuggestion: buildTmbSuggestion(latestScan, saved),
     };
   }
 
@@ -129,37 +212,74 @@ export class FoodDiaryService {
     const rangeStartIso = localDayWindow(dayStrings[0], timeZone).startIso;
     const rangeEndIso = localDayWindow(dayStrings[dayStrings.length - 1], timeZone).endIso;
 
-    const [entries, activities, targets] = await Promise.all([
+    const [entries, activities, plans] = await Promise.all([
       this.foodDiaryRepository.listConfirmedEntriesInRange(
         identity.userId,
         rangeStartIso,
         rangeEndIso,
       ),
       this.foodDiaryRepository.listActivitiesInRange(identity.userId, rangeStartIso, rangeEndIso),
-      this.foodDiaryRepository.listTargetsEffectiveUpTo(identity.userId, endDay),
+      // All plan versions (active + archived) effective up to the window's end.
+      this.foodDiaryRepository.listPlansEffectiveUpTo(identity.userId, endDay),
     ]);
 
-    const days = dayStrings.map((dayString) => {
-      const consumedKcal = entries
-        .filter((entry) => localDayOf(entry.logged_at, timeZone) === dayString)
-        .reduce((sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_kcal) ?? 0), 0);
-
+    const days: FoodDiaryHistoryDay[] = dayStrings.map((dayString): FoodDiaryHistoryDay => {
+      const dayEntries = entries.filter(
+        (entry) => localDayOf(entry.logged_at, timeZone) === dayString,
+      );
+      const consumedKcal = dayEntries.reduce(
+        (sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_kcal) ?? 0),
+        0,
+      );
+      const consumedProteinG = dayEntries.reduce(
+        (sum, entry) => sum + (toNumberOrNull(entry.confirmed_total_protein_g) ?? 0),
+        0,
+      );
       const burnedKcal = activities
         .filter((activity) => localDayOf(activity.logged_at, timeZone) === dayString)
         .reduce((sum, activity) => sum + toNumber(activity.kcal_burned), 0);
 
-      // targets are ordered effective_from desc: the first one on/before the day applies.
-      const targetRecord = targets.find((target) => target.effective_from <= dayString) ?? null;
-      const targetKcal = targetRecord ? toNumber(targetRecord.target_kcal) : null;
-      const balanceKcal =
-        targetKcal !== null ? roundKcal(consumedKcal - (targetKcal + burnedKcal)) : null;
+      // The plan version valid on this day = the one with the greatest
+      // effective_from ≤ day (plans are ordered effective_from desc).
+      const planRecord = selectPlanVersionForDay(plans, dayString);
+
+      if (!planRecord) {
+        return {
+          date: dayString,
+          consumedKcal: roundKcal(consumedKcal),
+          consumedProteinG: round1(consumedProteinG),
+          burnedKcal: roundKcal(burnedKcal),
+          status: "incomplete",
+          goal: null,
+          gastoDiaKcal: null,
+          alvoCentralKcal: null,
+          bandLowKcal: null,
+          bandHighKcal: null,
+          plannedBalanceKcal: null,
+        };
+      }
+
+      // SAME engine as Today — driven by that day's plan version + that day's activity.
+      const energy = computeEnergyPlan({
+        tmbKcal: toNumber(planRecord.tmb_kcal),
+        routineLevel: asRoutineLevel(planRecord.routine_level),
+        activitiesKcal: burnedKcal,
+        plannedBalanceKcal: toNumber(planRecord.planned_balance_kcal),
+        toleranceKcal: toNumber(planRecord.tolerance_kcal),
+      });
 
       return {
         date: dayString,
         consumedKcal: roundKcal(consumedKcal),
+        consumedProteinG: round1(consumedProteinG),
         burnedKcal: roundKcal(burnedKcal),
-        targetKcal: targetKcal !== null ? roundKcal(targetKcal) : null,
-        balanceKcal,
+        status: classifyConsumption(consumedKcal, energy),
+        goal: asGoal(planRecord.goal),
+        gastoDiaKcal: energy.gastoDiaKcal,
+        alvoCentralKcal: energy.alvoCentralKcal,
+        bandLowKcal: energy.bandLowKcal,
+        bandHighKcal: energy.bandHighKcal,
+        plannedBalanceKcal: toNumber(planRecord.planned_balance_kcal),
       };
     });
 
@@ -251,13 +371,17 @@ export class FoodDiaryService {
 
     const preparationHint = input.preparationHint?.trim();
     const userNotes = input.userNotes?.trim();
+    const textDescription = input.textDescription?.trim();
     const hiddenIngredients: Json = input.hiddenIngredients ?? [];
+    const inputKind = input.inputKind ?? "photo";
 
     try {
       const record = await this.foodDiaryRepository.createEntryDraft({
         studentUserId: identity.userId,
         mealType: input.mealType,
         loggedAt: input.loggedAt ?? new Date().toISOString(),
+        inputKind,
+        textDescription: textDescription ? textDescription : null,
         containerSize: input.containerSize ?? null,
         mealOrigin: input.mealOrigin ?? null,
         preparationHint: preparationHint ? preparationHint : null,
@@ -423,8 +547,13 @@ export class FoodDiaryService {
     if (status === "confirmed") {
       throw new ApiError(409, "food_diary_entry_already_confirmed", "Esta refeição já foi confirmada.");
     }
-    if (!record.photo_storage_path) {
+    const inputKind = record.input_kind;
+
+    if (inputKind === "photo" && !record.photo_storage_path) {
       throw new ApiError(400, "food_diary_photo_required", "Envie a foto antes de analisar.");
+    }
+    if ((inputKind === "text" || inputKind === "snack") && !record.text_description) {
+      throw new ApiError(400, "food_diary_text_required", "Descreva o que você comeu antes de analisar.");
     }
 
     // Daily quota (entry's local day). completed/confirmed count; a failed/rejected
@@ -441,26 +570,37 @@ export class FoodDiaryService {
       throw new ApiError(409, "food_diary_entry_processing", "Esta análise já está em processamento.");
     }
 
-    const signedUrl = await this.foodDiaryRepository.createSignedReadUrl(
-      record.photo_storage_path,
-      SIGNED_URL_TTL_SECONDS,
-    );
     const aiClient = this.deps.aiClientFactory();
     const analyzedAt = new Date().toISOString();
 
     let aiResponse: FoodDiaryAiResponse;
 
     try {
-      aiResponse = await aiClient.analyze({
-        imageUrl: signedUrl,
-        mealType: record.meal_type,
-        containerSize: record.container_size,
-        mealOrigin: record.meal_origin,
-        preparationHint: record.preparation_hint,
-        hiddenIngredients: toStringArray(record.hidden_ingredients),
-        isSharedPortion: record.is_shared_portion,
-        userNotes: record.user_notes,
-      });
+      if (inputKind === "text" || inputKind === "snack") {
+        // Text/snack: no photo — same structured output + review model.
+        aiResponse = await aiClient.analyzeText({
+          mealType: record.meal_type,
+          description: record.text_description ?? "",
+          containerSize: record.container_size,
+          userNotes: record.user_notes,
+          isSnack: inputKind === "snack",
+        });
+      } else {
+        const signedUrl = await this.foodDiaryRepository.createSignedReadUrl(
+          record.photo_storage_path as string,
+          SIGNED_URL_TTL_SECONDS,
+        );
+        aiResponse = await aiClient.analyze({
+          imageUrl: signedUrl,
+          mealType: record.meal_type,
+          containerSize: record.container_size,
+          mealOrigin: record.meal_origin,
+          preparationHint: record.preparation_hint,
+          hiddenIngredients: toStringArray(record.hidden_ingredients),
+          isSharedPortion: record.is_shared_portion,
+          userNotes: record.user_notes,
+        });
+      }
     } catch (error: unknown) {
       // Photo unusable → rejected; any other AI failure → failed. Neither consumes quota.
       const isRejection = error instanceof ApiError && error.code === "food_diary_image_rejected";
@@ -535,6 +675,38 @@ export class FoodDiaryService {
       throw new ApiError(422, validation.code, validation.message);
     }
 
+    // Text/snack only: if the description was too vague to estimate honestly, ask ONE
+    // short question instead of guessing in silence. The UI shows it, the user answers,
+    // and the re-analysis (skipClarification) accepts the best estimate — no clarify loop.
+    const isTextual = inputKind === "text" || inputKind === "snack";
+
+    if (isTextual && validation.needsClarification && !options.skipClarification) {
+      await this.foodDiaryRepository.replaceEntryItems(entryId, []);
+      await this.foodDiaryRepository.finalizeEntryAnalysis(entryId, {
+        status: "failed",
+        aiResult: aiResultJson,
+        aiModel: aiClient.modelName,
+        confidence: null,
+        qualityOverall: analysis.qualityOverall,
+        needsRetake: false,
+        failureReason: "needs_clarification",
+        estimatedTotalKcal: null,
+        estimatedTotalProteinG: null,
+        estimatedTotalCarbG: null,
+        estimatedTotalFatG: null,
+        estimatedTotalFiberG: null,
+        analyzedAt,
+      });
+
+      const question =
+        validation.clarificationQuestion
+        ?? "Pode detalhar melhor a quantidade ou o tamanho da porção?";
+
+      throw new ApiError(422, "food_diary_needs_clarification", question, {
+        clarificationQuestion: question,
+      });
+    }
+
     // Persist items FIRST, then mark completed — never a completed entry without items.
     const items: CreateItemDbInput[] = validation.items.map((item, index) => ({
       entryId,
@@ -542,6 +714,8 @@ export class FoodDiaryService {
       name: item.name,
       preparation: item.preparation,
       category: item.category,
+      identification: item.identification,
+      alternatives: item.alternatives as unknown as Json,
       gramsEstimated: item.gramsEstimated,
       gramsConfirmed: null,
       householdMeasure: item.householdMeasure,
@@ -596,6 +770,7 @@ export class FoodDiaryService {
     }
 
     for (const edit of input.items ?? []) {
+      const resolution = resolveItemIdentity(edit);
       const updated = await this.foodDiaryRepository.updateItemForEntry({
         itemId: edit.id,
         entryId,
@@ -603,6 +778,7 @@ export class FoodDiaryService {
         isRemoved: edit.isRemoved,
         name: edit.name?.trim() ? edit.name.trim() : undefined,
         preparation: edit.preparation,
+        ...resolution,
       });
 
       if (!updated) {
@@ -623,6 +799,9 @@ export class FoodDiaryService {
           name: added.name.trim(),
           preparation: added.preparation ?? null,
           category: added.category ?? null,
+          // Manual item: the user chose it, so the identity is not ambiguous.
+          identification: "identified",
+          alternatives: [] as unknown as Json,
           // Manual item: the informed grams are both the estimate and the confirmed value.
           gramsEstimated: added.grams,
           gramsConfirmed: added.grams,
@@ -670,6 +849,21 @@ export class FoodDiaryService {
 
     const items = await this.foodDiaryRepository.listItemsByEntryId(entryId);
     const activeItems = items.filter((item) => !item.is_removed);
+
+    // Last barrier: never confirm a meal whose active items still have an unresolved
+    // identity (ambiguous/unknown). The user must pick a candidate — or remove the item
+    // — in review first. A frango→porco choice, or "Outro", flips it to "identified".
+    const unresolved = activeItems.filter((item) => isUnresolvedIdentity(item.identification));
+
+    if (unresolved.length > 0) {
+      throw new ApiError(
+        422,
+        "food_diary_items_unresolved",
+        "Antes de confirmar, resolva os itens com identidade ambígua (escolha um candidato ou remova o item).",
+        { unresolvedCount: unresolved.length },
+      );
+    }
+
     const totals = computeConfirmedTotals(activeItems);
 
     const confirmed = await this.foodDiaryRepository.finalizeEntryConfirmation(entryId, {
@@ -852,6 +1046,56 @@ function toStringArray(value: Json): string[] {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+/**
+ * Parse the persisted `alternatives` JSON (array of complete candidates) into views.
+ * Tolerant of legacy rows: a bare string becomes a name-only candidate with zeroed
+ * macros; malformed entries are skipped. Never throws — a bad column can't break a read.
+ */
+function parseItemAlternatives(value: Json): FoodDiaryItemAlternative[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const out: FoodDiaryItemAlternative[] = [];
+
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const name = entry.trim();
+
+      if (name) {
+        out.push({ name, kcalPer100g: 0, proteinPer100g: 0, carbPer100g: 0, fatPer100g: 0, fiberPer100g: null });
+      }
+
+      continue;
+    }
+
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+
+    const record = entry as Record<string, Json>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const protein = numberOrNull(record.proteinPer100g);
+    const carb = numberOrNull(record.carbPer100g);
+    const fat = numberOrNull(record.fatPer100g);
+
+    if (!name || protein === null || carb === null || fat === null) {
+      continue;
+    }
+
+    out.push({
+      name,
+      kcalPer100g: numberOrNull(record.kcalPer100g) ?? round1(4 * protein + 4 * carb + 9 * fat),
+      proteinPer100g: protein,
+      carbPer100g: carb,
+      fatPer100g: fat,
+      fiberPer100g: numberOrNull(record.fiberPer100g),
+    });
+  }
+
+  return out;
+}
+
 function groupItemsByEntry(items: FoodDiaryItemRecord[]): Map<string, FoodDiaryItemRecord[]> {
   const grouped = new Map<string, FoodDiaryItemRecord[]>();
 
@@ -890,6 +1134,8 @@ function mapItemToView(record: FoodDiaryItemRecord): FoodDiaryItemView {
     name: record.name,
     preparation: record.preparation,
     category: record.category,
+    identification: record.identification,
+    alternatives: parseItemAlternatives(record.alternatives),
     gramsEstimated: toNumber(record.grams_estimated),
     gramsConfirmed: toNumberOrNull(record.grams_confirmed),
     householdMeasure: record.household_measure,
@@ -959,4 +1205,113 @@ function mapActivityToView(record: ActivityEnergyEntryRecord): ActivityEnergyVie
     loggedAt: record.logged_at,
     workoutSessionId: record.workout_session_id,
   };
+}
+
+/* ─── Energy plan (Diário 2.0) mappers ─── */
+
+function mapPlanToView(record: FoodDiaryPlanRecord): FoodDiaryPlanView {
+  const goal = asGoal(record.goal);
+  const routineLevel = asRoutineLevel(record.routine_level);
+
+  return {
+    id: record.id,
+    status: record.status,
+    effectiveFrom: record.effective_from,
+    goal,
+    goalLabel: GOAL_LABELS[goal],
+    tmbKcal: toNumber(record.tmb_kcal),
+    tmbSource: asTmbSource(record.tmb_source),
+    tmbSnapshot: parseSnapshot(record.tmb_input),
+    scanId: record.scan_id,
+    routineLevel,
+    routineLabel: ROUTINE_LEVEL_LABELS[routineLevel],
+    routineFactor: toNumber(record.routine_factor),
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    toleranceKcal: toNumber(record.tolerance_kcal),
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+  };
+}
+
+function buildHud(record: FoodDiaryPlanRecord, consumedKcal: number, burnedKcal: number): FoodDiaryHud {
+  const goal = asGoal(record.goal);
+  const energy = computeEnergyPlan({
+    tmbKcal: toNumber(record.tmb_kcal),
+    routineLevel: asRoutineLevel(record.routine_level),
+    activitiesKcal: burnedKcal,
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    toleranceKcal: toNumber(record.tolerance_kcal),
+  });
+  const status = classifyConsumption(consumedKcal, energy);
+
+  return {
+    goal,
+    goalLabel: GOAL_LABELS[goal],
+    missionLabel: missionLabelFor(goal),
+    status,
+    statusLabel: statusLabelFor(status),
+    tmbKcal: energy.tmbKcal,
+    routineFactor: energy.routineFactor,
+    gastoBaseKcal: energy.gastoBaseKcal,
+    gastoDiaKcal: energy.gastoDiaKcal,
+    alvoCentralKcal: energy.alvoCentralKcal,
+    plannedBalanceKcal: toNumber(record.planned_balance_kcal),
+    bandLowKcal: energy.bandLowKcal,
+    bandHighKcal: energy.bandHighKcal,
+    consumedKcal: roundKcal(consumedKcal),
+    burnedKcal: roundKcal(burnedKcal),
+    kcalToBandTop: kcalToBandTop(consumedKcal, energy),
+    kcalOverBandTop: kcalOverBandTop(consumedKcal, energy),
+  };
+}
+
+function buildTmbSuggestion(
+  scan: LatestScanTmb | null,
+  plan: FoodDiaryPlanRecord | null,
+): TmbSuggestion {
+  if (!scan) {
+    return {
+      hasScan: false,
+      scanId: null,
+      scanCreatedAt: null,
+      tmbKcal: null,
+      leanMassKg: null,
+      bodyFatPercent: null,
+      weightKg: null,
+      hasNewerScanThanPlan: false,
+    };
+  }
+
+  const tmbKcal =
+    scan.leanMassKg && scan.leanMassKg > 0 ? estimateTmbFromLeanMass(scan.leanMassKg) : scan.bmr;
+  const hasNewerScanThanPlan =
+    plan !== null && plan.scan_id !== scan.id && scan.createdAt > plan.created_at;
+
+  return {
+    hasScan: true,
+    scanId: scan.id,
+    scanCreatedAt: scan.createdAt,
+    tmbKcal,
+    leanMassKg: scan.leanMassKg,
+    bodyFatPercent: scan.bodyFatPercent,
+    weightKg: scan.weightKg,
+    hasNewerScanThanPlan,
+  };
+}
+
+function parseSnapshot(value: Json): PlanTmbSnapshot {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, Json>;
+    return {
+      leanMassKg: numberOrNull(record.leanMassKg),
+      bodyFatPercent: numberOrNull(record.bodyFatPercent),
+      weightKg: numberOrNull(record.weightKg),
+    };
+  }
+
+  return { leanMassKg: null, bodyFatPercent: null, weightKg: null };
+}
+
+function numberOrNull(value: Json | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

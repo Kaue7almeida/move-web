@@ -36,11 +36,11 @@ import {
   MEAL_CHOICES,
   MEAL_LABELS,
   MEAL_ORIGIN_OPTIONS,
-  PREPARO_OPTIONS,
   PREP_TIPS,
 } from "../_content";
 import { describeFoodDiaryError, type FoodDiaryErrorInfo } from "../_errors";
 import { itemGrams, itemMacros, sumMacros } from "../_nutrition";
+import { type ItemResolution, needsResolution, resolutionEdit, resolvedView } from "../_review";
 import { useCountUp } from "./BalanceRing";
 
 type WizardStep = "prep" | "foto" | "contexto" | "processing" | "review" | "done" | "error";
@@ -117,7 +117,6 @@ export function MealWizard({
   const [mealType, setMealType] = useState<MealType>(initialMealType);
   const [containerSize, setContainerSize] = useState<ContainerSize | null>(null);
   const [mealOrigin, setMealOrigin] = useState<MealOrigin | null>(null);
-  const [preparo, setPreparo] = useState<string | null>(null);
   const [escondidos, setEscondidos] = useState<string[]>([]);
   const [isShared, setIsShared] = useState(false);
   const [notes, setNotes] = useState("");
@@ -131,6 +130,7 @@ export function MealWizard({
   const [items, setItems] = useState<FoodDiaryItemView[]>([]);
   const [gramsById, setGramsById] = useState<Record<string, number>>({});
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [resolutionById, setResolutionById] = useState<Record<string, ItemResolution>>({});
   const [qualityOverall, setQualityOverall] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -155,8 +155,18 @@ export function MealWizard({
     [items, removedIds],
   );
   const totals = useMemo(
-    () => sumMacros(activeItems.map((item) => itemMacros(item, gramsById[item.id] ?? itemGrams(item)))),
-    [activeItems, gramsById],
+    () =>
+      sumMacros(
+        activeItems.map((item) =>
+          itemMacros(resolvedView(item, resolutionById[item.id]), gramsById[item.id] ?? itemGrams(item)),
+        ),
+      ),
+    [activeItems, gramsById, resolutionById],
+  );
+  // Itens ambíguos/desconhecidos precisam de escolha do usuário antes de confirmar.
+  const hasUnresolved = useMemo(
+    () => activeItems.some((item) => needsResolution(item) && !(item.id in resolutionById)),
+    [activeItems, resolutionById],
   );
   const reviewKcal = useCountUp(totals.kcal, 450);
   const doneKcal = useCountUp(step === "done" ? confirmedTotalKcal : 0, 1000);
@@ -246,7 +256,6 @@ export function MealWizard({
           mealType,
           containerSize: containerSize ?? undefined,
           mealOrigin: mealOrigin ?? undefined,
-          preparationHint: preparo ?? undefined,
           hiddenIngredients: escondidos.length > 0 ? escondidos : undefined,
           isSharedPortion: isShared || undefined,
           userNotes: notes.trim() || undefined,
@@ -282,6 +291,7 @@ export function MealWizard({
         setItems(entry.items);
         setGramsById(grams);
         setRemovedIds(new Set());
+        setResolutionById({});
         setQualityOverall(entry.qualityOverall);
         setReviewError(null);
         setStep("review");
@@ -299,7 +309,7 @@ export function MealWizard({
       setErrorInfo(describeFoodDiaryError(caught));
       setStep("error");
     }
-  }, [mealType, containerSize, mealOrigin, preparo, escondidos, isShared, notes, file]);
+  }, [mealType, containerSize, mealOrigin, escondidos, isShared, notes, file]);
 
   /* ─── Revisão ─── */
 
@@ -324,7 +334,7 @@ export function MealWizard({
   async function confirmMeal() {
     const id = entryIdRef.current;
 
-    if (!id || activeItems.length === 0 || confirming) {
+    if (!id || activeItems.length === 0 || confirming || hasUnresolved) {
       return;
     }
 
@@ -332,12 +342,14 @@ export function MealWizard({
     setReviewError(null);
 
     try {
-      // PATCH em lote (não por tecla): grama confirmada + remoções.
+      // PATCH em lote (não por tecla): grama confirmada + remoções + identidade
+      // escolhida (candidato completo: nome + macros) para itens ambíguos.
       await reviewEntry(id, {
         items: items.map((item) => ({
           id: item.id,
           gramsConfirmed: gramsById[item.id] ?? itemGrams(item),
           isRemoved: removedIds.has(item.id),
+          ...resolutionEdit(resolutionById[item.id]),
         })),
       });
 
@@ -542,17 +554,8 @@ export function MealWizard({
                 ))}
               </ContextGroup>
 
-              <ContextGroup label="Preparo predominante" optional>
-                {PREPARO_OPTIONS.map((option) => (
-                  <Chip
-                    key={option}
-                    label={option}
-                    active={preparo === option}
-                    onClick={() => setPreparo((current) => (current === option ? null : option))}
-                  />
-                ))}
-              </ContextGroup>
-
+              {/* Sem "preparo do prato inteiro": preparo é POR ITEM (a IA devolve e o
+                  usuário revisa). Aqui fica só um contexto textual opcional (Observações). */}
               <ContextGroup label="Tem algo que não aparece na foto?" optional>
                 {ESCONDIDOS_OPTIONS.map((option) => (
                   <Chip
@@ -699,8 +702,10 @@ export function MealWizard({
               <ul className="space-y-3">
                 {items.map((item) => {
                   const removed = removedIds.has(item.id);
+                  const resolution = resolutionById[item.id];
+                  const view = resolvedView(item, resolution);
                   const grams = gramsById[item.id] ?? itemGrams(item);
-                  const macros = itemMacros(item, grams);
+                  const macros = itemMacros(view, grams);
                   const maxGrams = Math.max(Math.round((grams * 2) / 5) * 5, 100);
 
                   return (
@@ -719,9 +724,14 @@ export function MealWizard({
                               removed ? "line-through" : "",
                             ].join(" ")}
                           >
-                            {item.name}
+                            {view.name}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {item.preparation && (
+                              <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                                {item.preparation}
+                              </span>
+                            )}
                             {item.category && (
                               <span className="rounded-full bg-surface-strong px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 {item.category}
@@ -750,6 +760,61 @@ export function MealWizard({
                           </button>
                         </div>
                       </div>
+
+                      {needsResolution(item) && !removed && (
+                        <div className="mt-3 rounded-lg border border-accent/30 bg-accent-muted/40 p-2.5">
+                          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-accent">
+                            <AlertTriangle size={12} />
+                            {item.identification === "unknown"
+                              ? "Não identifiquei com certeza — confirme:"
+                              : "Tipo incerto — escolha qual é (muda as calorias):"}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {item.alternatives.map((alt) => {
+                              const selected =
+                                resolution?.kind === "alternative" && resolution.alt.name === alt.name;
+
+                              return (
+                                <button
+                                  key={alt.name}
+                                  type="button"
+                                  onClick={() =>
+                                    setResolutionById((current) => ({
+                                      ...current,
+                                      [item.id]: { kind: "alternative", alt },
+                                    }))
+                                  }
+                                  className={[
+                                    "rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+                                    selected
+                                      ? "border-accent bg-accent text-accent-on"
+                                      : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+                                  ].join(" ")}
+                                >
+                                  {alt.name}
+                                  <span className={selected ? "ml-1 opacity-80" : "ml-1 text-muted"}>
+                                    {Math.round(alt.kcalPer100g)} kcal/100g
+                                  </span>
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setResolutionById((current) => ({ ...current, [item.id]: { kind: "keep" } }))
+                              }
+                              className={[
+                                "rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+                                resolution?.kind === "keep"
+                                  ? "border-accent bg-accent text-accent-on"
+                                  : "border-border bg-surface text-muted-foreground hover:border-accent/40 hover:text-foreground",
+                              ].join(" ")}
+                            >
+                              {item.identification === "unknown" ? "Manter estimativa" : "Outro / manter"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {!removed && (
                         <>
@@ -792,6 +857,12 @@ export function MealWizard({
                 </p>
               )}
 
+              {hasUnresolved && (
+                <p className="flex items-center gap-1.5 text-[11px] font-medium text-accent" role="alert">
+                  <AlertTriangle size={13} /> Escolha o tipo dos itens marcados como incertos para confirmar.
+                </p>
+              )}
+
               <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-wider text-muted">
@@ -804,7 +875,7 @@ export function MealWizard({
                 </div>
                 <button
                   type="button"
-                  disabled={activeItems.length === 0 || confirming}
+                  disabled={activeItems.length === 0 || confirming || hasUnresolved}
                   onClick={() => void confirmMeal()}
                   className="inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-sm font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 >

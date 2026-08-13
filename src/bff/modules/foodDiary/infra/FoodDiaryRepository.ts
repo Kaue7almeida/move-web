@@ -19,6 +19,11 @@ import type {
   FoodDiaryEntryRecord,
   FoodDiaryItemRecord,
 } from "@/bff/modules/foodDiary/types";
+import type {
+  FoodDiaryPlanRecord,
+  LatestScanTmb,
+  UpsertPlanDbInput,
+} from "@/bff/modules/foodDiary/types/plan";
 
 const FOOD_DIARY_PHOTOS_BUCKET = "food-diary-photos";
 
@@ -43,6 +48,8 @@ function toItemInsert(
     name: input.name,
     preparation: input.preparation,
     category: input.category,
+    identification: input.identification,
+    alternatives: input.alternatives,
     grams_estimated: input.gramsEstimated,
     grams_confirmed: input.gramsConfirmed,
     household_measure: input.householdMeasure,
@@ -70,6 +77,8 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
       status: "draft",
       meal_type: input.mealType,
       logged_at: input.loggedAt,
+      input_kind: input.inputKind,
+      text_description: input.textDescription,
       container_size: input.containerSize,
       meal_origin: input.mealOrigin,
       preparation_hint: input.preparationHint,
@@ -397,6 +406,27 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     if (input.preparation !== undefined) {
       payload.preparation = input.preparation;
     }
+    if (input.identification !== undefined) {
+      payload.identification = input.identification;
+    }
+    if (input.alternatives !== undefined) {
+      payload.alternatives = input.alternatives;
+    }
+    if (input.kcalPer100g !== undefined) {
+      payload.kcal_per_100g = input.kcalPer100g;
+    }
+    if (input.proteinPer100g !== undefined) {
+      payload.protein_per_100g = input.proteinPer100g;
+    }
+    if (input.carbPer100g !== undefined) {
+      payload.carb_per_100g = input.carbPer100g;
+    }
+    if (input.fatPer100g !== undefined) {
+      payload.fat_per_100g = input.fatPer100g;
+    }
+    if (input.fiberPer100g !== undefined) {
+      payload.fiber_per_100g = input.fiberPer100g;
+    }
 
     const { data, error } = await this.supabase
       .from("food_diary_items")
@@ -535,6 +565,95 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     }
 
     return data ?? [];
+  }
+
+  /* ─── food_diary_plans ─── */
+
+  async findActivePlan(userId: string): Promise<FoodDiaryPlanRecord | null> {
+    const { data, error } = await this.supabase
+      .from("food_diary_plans")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async upsertPlanVersioned(input: UpsertPlanDbInput): Promise<FoodDiaryPlanRecord> {
+    // Atomic (RPC): archive+insert on a later-day change, update-in-place same day.
+    const { data, error } = await this.supabase.rpc("food_diary_upsert_plan", {
+      p_user_id: input.userId,
+      p_today: input.today,
+      p_goal: input.goal,
+      p_tmb_kcal: input.tmbKcal,
+      p_tmb_source: input.tmbSource,
+      p_tmb_input: input.tmbInput as unknown as Database["public"]["Functions"]["food_diary_upsert_plan"]["Args"]["p_tmb_input"],
+      p_scan_id: input.scanId,
+      p_routine_level: input.routineLevel,
+      p_routine_factor: input.routineFactor,
+      p_planned_balance_kcal: input.plannedBalanceKcal,
+      p_tolerance_kcal: input.toleranceKcal,
+    });
+
+    if (error || !data) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data;
+  }
+
+  async listPlansEffectiveUpTo(
+    userId: string,
+    dateString: string,
+  ): Promise<FoodDiaryPlanRecord[]> {
+    const { data, error } = await this.supabase
+      .from("food_diary_plans")
+      .select("*")
+      .eq("user_id", userId)
+      .lte("effective_from", dateString)
+      .order("effective_from", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    return data ?? [];
+  }
+
+  async findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null> {
+    const { data, error } = await this.supabase
+      .from("scan_analyses")
+      .select("id, lean_mass_kg, bmr, body_fat_percent, weight_kg, created_at")
+      .eq("student_user_id", userId)
+      .eq("status", "completed")
+      .order("processed_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      id: data.id,
+      leanMassKg: data.lean_mass_kg,
+      bmr: data.bmr,
+      bodyFatPercent: data.body_fat_percent,
+      weightKg: data.weight_kg,
+      createdAt: data.created_at,
+    };
   }
 
   /* ─── storage: food-diary-photos (private bucket) ─── */
