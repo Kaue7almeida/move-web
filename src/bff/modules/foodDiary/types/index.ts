@@ -57,6 +57,15 @@ export type CreateActivityInput = {
   loggedAt?: string;
 };
 
+/** Input do fluxo de estimativa de atividade por descrição (IA + regra determinística). */
+export type EstimateActivityRequest = {
+  description: string;
+  /** Peso informado no fluxo (kg) — usado SÓ para a estimativa; não altera perfil/plano. */
+  weightKg?: number;
+  /** true quando o usuário confirmou que é atividade EXTRA (não faz parte da rotina). */
+  forceExtra?: boolean;
+};
+
 export type EntryInputKind = "photo" | "text" | "snack";
 
 export type CreateEntryDraftInput = {

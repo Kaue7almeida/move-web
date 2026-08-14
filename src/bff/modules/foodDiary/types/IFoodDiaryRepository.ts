@@ -205,6 +205,8 @@ export interface IFoodDiaryRepository {
   listPlansEffectiveUpTo(userId: string, dateString: string): Promise<FoodDiaryPlanRecord[]>;
   /** Latest completed MoveScan for the user (for the TMB suggestion), or null. */
   findLatestScanTmbForUser(userId: string): Promise<LatestScanTmb | null>;
+  /** Weight (kg) from the user's own student_profile, if any — a weight fallback. */
+  findStudentProfileWeightKg(userId: string): Promise<number | null>;
 
   // ── storage: food-diary-photos (private bucket) ──
   uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void>;
