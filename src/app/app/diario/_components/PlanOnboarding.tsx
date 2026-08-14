@@ -291,7 +291,7 @@ function StepObjetivo({ goal, onPick }: { goal: GoalKind; onPick: (goal: GoalKin
             onClick={() => onPick(option)}
             aria-pressed={goal === option}
             className={[
-              "flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all",
+              "dia-selectable flex w-full items-center gap-3 rounded-2xl border p-4 text-left",
               goal === option
                 ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30"
                 : "border-border bg-surface hover:border-accent/40",
@@ -408,22 +408,23 @@ function StepMetabolismo({
             <Info size={15} className="text-accent" /> Como descobrir sua TMB
           </p>
           <p className="text-[14px] leading-relaxed text-muted-foreground">
-            A TMB depende da sua composição corporal. Você pode conseguir esses dados numa
-            avaliação física ou numa bioimpedância — de lá saem seu <strong>% de gordura</strong> e
-            sua <strong>massa magra</strong>.
+            A TMB depende da sua composição corporal — seu <strong>% de gordura</strong> e sua{" "}
+            <strong>massa magra</strong>. Esses dados podem vir de uma avaliação física ou de uma
+            bioimpedância.
           </p>
-          {canScan && !hasScan && (
+          {canScan && (
             <p className="text-[14px] leading-relaxed text-muted-foreground">
-              O <strong>MoveScan</strong> estima isso pra você a partir de uma foto.
+              No Move, o <strong>MoveScan</strong> é a análise corporal <strong>por foto</strong>:
+              estima seu % de gordura e sua massa magra sem precisar de balança.
             </p>
           )}
           <div className="flex flex-wrap gap-2 pt-1">
             {canScan && (
               <Link
                 href="/app/scan"
-                className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-bold text-accent-on transition-colors hover:bg-accent-hover"
+                className="dia-selectable inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-[14px] font-bold text-accent-on hover:bg-accent-hover"
               >
-                <ScanLine size={15} /> Fazer um MoveScan
+                <ScanLine size={15} /> Fazer meu MoveScan
               </Link>
             )}
             <button
@@ -489,7 +490,7 @@ function StepRotinaPlano({
               onClick={() => onRoutine(option)}
               aria-pressed={routineLevel === option}
               className={[
-                "rounded-2xl border p-3.5 text-left transition-all",
+                "dia-selectable rounded-2xl border p-3.5 text-left",
                 routineLevel === option
                   ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30"
                   : "border-border bg-surface hover:border-accent/40",
@@ -620,7 +621,7 @@ function SourceCard({
       onClick={onClick}
       aria-pressed={active}
       className={[
-        "flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all",
+        "dia-selectable flex w-full items-center gap-3 rounded-2xl border p-4 text-left",
         active ? "border-accent bg-accent-muted/40 ring-1 ring-accent/30" : "border-border bg-surface hover:border-accent/40",
       ].join(" ")}
     >
@@ -660,7 +661,7 @@ function LabeledInput({
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-[15px] font-semibold text-foreground placeholder:font-normal placeholder:text-muted"
+        className="dia-field mt-1 h-12 w-full px-3.5 font-semibold"
       />
     </label>
   );

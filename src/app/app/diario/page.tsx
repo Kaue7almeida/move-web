@@ -12,6 +12,7 @@ import { getHistory, getToday } from "@/services/foodDiary/foodDiaryService";
 
 import { useAppShell } from "../AppShellContext";
 import { PageHeader, RoleGuard } from "../app-ui";
+import { AskAiAboutDay } from "./_components/AskAiAboutDay";
 import { BottomSheet } from "./_components/BottomSheet";
 import { DiaryHud } from "./_components/DiaryHud";
 import { DiaryToday } from "./_components/DiaryToday";
@@ -264,11 +265,13 @@ function TodayPanel({
       )}
 
       {today.plan !== null && today.hud !== null ? (
-        <div className="space-y-6">
-          {/* Hierarquia 2.1: Missão/HUD → Próximo movimento → Registrar/Trilha/Refeições/Atividades → Plano */}
+        <div className="dia-stagger space-y-6">
+          {/* Hierarquia: Missão/HUD → Próximo movimento → Conversar com a IA → Registrar/... → Plano */}
           <DiaryHud hud={today.hud} onExplain={() => setExplainOpen(true)} />
 
           <NextMove today={today} hud={today.hud} />
+
+          <AskAiAboutDay />
 
           <DiaryToday today={today} onStartMeal={onStartMeal} onRefresh={onRefresh} hud={today.hud} />
 

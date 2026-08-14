@@ -169,7 +169,7 @@ export function TextMealFlow({
             }
           }}
           placeholder="Sua resposta (ex.: uma fatia média)"
-          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+          className="dia-field h-12 w-full px-3.5"
         />
 
         <button
@@ -265,7 +265,7 @@ export function TextMealFlow({
           onChange={(event) => changeDescription(event.target.value)}
           rows={isSnack ? 2 : 3}
           placeholder={isSnack ? "Ex.: 1 barra de chocolate ao leite" : "Ex.: 2 pães de queijo e um café com leite"}
-          className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-foreground placeholder:text-muted"
+          className="dia-field w-full px-3.5 py-3 leading-relaxed"
         />
       </div>
 
@@ -297,7 +297,7 @@ export function TextMealFlow({
           value={kcalHint}
           onChange={(event) => setKcalHint(event.target.value)}
           placeholder="Se não souber, a IA estima"
-          className="h-10 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground placeholder:text-muted"
+          className="dia-field h-12 w-full px-3.5"
         />
       </div>
 
