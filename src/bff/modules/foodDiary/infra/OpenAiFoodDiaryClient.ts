@@ -1,4 +1,10 @@
 import { ApiError } from "@/bff/core/errors/ApiError";
+import { ACTIVITY_KEYS } from "@/bff/modules/foodDiary/activityEstimation";
+import {
+  activityAiResponseSchema,
+  type ActivityAiInput,
+  type ActivityAiResponse,
+} from "@/bff/modules/foodDiary/types/activityAi";
 import {
   foodDiaryAiResponseSchema,
   type FoodDiaryAiInput,
@@ -129,6 +135,85 @@ const FOOD_DIARY_JSON_SCHEMA: Record<string, unknown> = {
     },
   },
 };
+
+/* ─── JSON Schema: interpretação de ATIVIDADE (kept in sync with activityAiResponseSchema) ─── */
+
+const ACTIVITY_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["interpretation"],
+  properties: {
+    interpretation: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "activityKey",
+        "label",
+        "durationMinutes",
+        "distanceKm",
+        "steps",
+        "intensity",
+        "isEverydayMovement",
+        "needsClarification",
+        "clarificationQuestion",
+        "confidence",
+        "notes",
+      ],
+      properties: {
+        activityKey: { type: "string", enum: [...ACTIVITY_KEYS, "unknown"] },
+        label: { type: "string" },
+        durationMinutes: NULLABLE_NUMBER,
+        distanceKm: NULLABLE_NUMBER,
+        steps: NULLABLE_NUMBER,
+        intensity: { anyOf: [{ type: "string", enum: ["leve", "moderada", "intensa"] }, { type: "null" }] },
+        isEverydayMovement: { type: "boolean" },
+        needsClarification: { type: "boolean" },
+        clarificationQuestion: NULLABLE_STRING,
+        confidence: { type: "number" },
+        notes: NULLABLE_STRING,
+      },
+    },
+  },
+};
+
+function buildActivitySystemPrompt(): string {
+  return `\
+You are an activity interpretation engine for the Move fitness app.
+
+CONTEXT: You receive a TEXT description of how someone moved (e.g. "caminhei 4 km em 50 min", "musculação 45 min", "dei 9 mil passos"). Your ONLY job is to INTERPRET it into a structured shape. You do NOT compute calories or METs — a deterministic engine does that from your output.
+
+MAP to ONE curated activityKey (never invent a new one):
+• walking, running, cycling, strength (musculação/força), stairs (escadas), elliptical (elíptico), swimming (natação), soccer (futebol), basketball (basquete), tennis (tênis), volleyball (vôlei), sports (outra atividade esportiva).
+• If it clearly is none of these / you cannot tell, use "unknown".
+
+EXTRACT when present (else null):
+• durationMinutes (convert "50 min", "uma hora" → 60, etc.).
+• distanceKm (convert "4 km", "800 m" → 0.8).
+• steps (e.g. "9 mil passos" → 9000).
+• intensity: "leve" | "moderada" | "intensa" when the text implies effort (mostly for strength/stairs/swimming/cycling/sports); else null.
+
+CLARIFICATION (one short question, never a questionnaire):
+• If a DECISIVE detail is missing to estimate honestly, set needsClarification=true and put ONE short pt-BR question in clarificationQuestion.
+• Classic case: distance or steps WITHOUT a duration → ask "Quanto tempo levou, aproximadamente?". Estimation needs the duration.
+• If duration is present and the activity is clear, needsClarification=false and clarificationQuestion=null.
+
+EVERYDAY MOVEMENT (avoid double counting):
+• The app already accounts for daily-life movement via a routine factor. If the description sounds like ROUTINE/daily movement rather than a deliberate workout — e.g. "9 mil passos trabalhando", "andei no shopping", "fui a pé ao trabalho" — set isEverydayMovement=true so the UI can confirm it's EXTRA before counting it. A clearly deliberate workout ("corri 5 km", "fiz musculação") is isEverydayMovement=false.
+
+STRICT:
+• Return valid JSON only, matching the schema. No prose outside it.
+• All human-readable strings (label, clarificationQuestion, notes) in pt-BR. label is a short activity name (e.g. "Caminhada").
+• confidence: 0.0–1.0 self-reported. Never medical/clinical advice.`;
+}
+
+function buildActivityContent(input: ActivityAiInput): InputContent[] {
+  return [
+    {
+      type: "input_text",
+      text: `Interprete a atividade descrita pelo usuário.\n\nDescrição: ${input.description}`,
+    },
+  ];
+}
 
 /* ─── Prompt builders ────────────────────────────────────────────────────────── */
 
@@ -295,25 +380,77 @@ export class OpenAiFoodDiaryClient {
 
   /** Photo meal analysis (image + context). */
   async analyze(input: FoodDiaryAiInput): Promise<FoodDiaryAiResponse> {
-    return this.send(buildSystemPrompt(), buildUserContent(input), {
-      code: "food_diary_image_rejected",
-      message: "A imagem não foi aceita pelo serviço de análise. Verifique o enquadramento e a iluminação.",
+    const parsed = await this.postJson(buildSystemPrompt(), buildUserContent(input), {
+      schemaName: "food_diary_analysis",
+      jsonSchema: FOOD_DIARY_JSON_SCHEMA,
+      refusal: {
+        code: "food_diary_image_rejected",
+        message: "A imagem não foi aceita pelo serviço de análise. Verifique o enquadramento e a iluminação.",
+      },
     });
+    return this.validateFood(parsed);
   }
 
   /** Text meal / snack analysis (no photo) — same structured output contract. */
   async analyzeText(input: FoodDiaryTextInput): Promise<FoodDiaryAiResponse> {
-    return this.send(buildTextSystemPrompt(), buildTextContent(input), {
-      code: "food_diary_text_rejected",
-      message: "Não consegui interpretar a descrição. Tente detalhar melhor o que você comeu.",
+    const parsed = await this.postJson(buildTextSystemPrompt(), buildTextContent(input), {
+      schemaName: "food_diary_analysis",
+      jsonSchema: FOOD_DIARY_JSON_SCHEMA,
+      refusal: {
+        code: "food_diary_text_rejected",
+        message: "Não consegui interpretar a descrição. Tente detalhar melhor o que você comeu.",
+      },
     });
+    return this.validateFood(parsed);
   }
 
-  private async send(
+  /**
+   * INTERPRET an activity description into the curated structured shape. Returns NO
+   * kcal/MET — the deterministic engine (activityEstimation) computes those.
+   */
+  async interpretActivity(input: ActivityAiInput): Promise<ActivityAiResponse> {
+    const parsed = await this.postJson(buildActivitySystemPrompt(), buildActivityContent(input), {
+      schemaName: "activity_interpretation",
+      jsonSchema: ACTIVITY_JSON_SCHEMA,
+      refusal: {
+        code: "food_diary_activity_rejected",
+        message: "Não consegui interpretar a atividade. Tente descrever de outro jeito.",
+      },
+    });
+
+    const validated = activityAiResponseSchema.safeParse(parsed);
+
+    if (!validated.success) {
+      throw new ApiError(
+        502,
+        "food_diary_ai_invalid_response",
+        "A resposta da interpretação não corresponde ao formato esperado.",
+      );
+    }
+
+    return validated.data;
+  }
+
+  private validateFood(parsed: unknown): FoodDiaryAiResponse {
+    const validated = foodDiaryAiResponseSchema.safeParse(parsed);
+
+    if (!validated.success) {
+      throw new ApiError(
+        502,
+        "food_diary_ai_invalid_response",
+        "A resposta da análise não corresponde ao formato esperado.",
+      );
+    }
+
+    return validated.data;
+  }
+
+  private async postJson(
     instructions: string,
     content: InputContent[],
-    refusal: { code: string; message: string },
-  ): Promise<FoodDiaryAiResponse> {
+    opts: { schemaName: string; jsonSchema: Record<string, unknown>; refusal: { code: string; message: string } },
+  ): Promise<unknown> {
+    const { refusal } = opts;
     const requestBody: ResponsesApiBody = {
       model: this.model,
       instructions,
@@ -322,8 +459,8 @@ export class OpenAiFoodDiaryClient {
       text: {
         format: {
           type: "json_schema",
-          name: "food_diary_analysis",
-          schema: FOOD_DIARY_JSON_SCHEMA,
+          name: opts.schemaName,
+          schema: opts.jsonSchema,
           strict: true,
         },
       },
@@ -420,16 +557,6 @@ export class OpenAiFoodDiaryClient {
       );
     }
 
-    const validated = foodDiaryAiResponseSchema.safeParse(parsed);
-
-    if (!validated.success) {
-      throw new ApiError(
-        502,
-        "food_diary_ai_invalid_response",
-        "A resposta da análise não corresponde ao formato esperado.",
-      );
-    }
-
-    return validated.data;
+    return parsed;
   }
 }

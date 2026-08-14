@@ -24,6 +24,11 @@ import {
 } from "@/bff/modules/foodDiary/planEnergy";
 import { resolvePlanInputs, selectPlanVersionForDay } from "@/bff/modules/foodDiary/planBuild";
 import { isUnresolvedIdentity, resolveItemIdentity } from "@/bff/modules/foodDiary/reviewResolution";
+import {
+  type ActivityEstimateOutcome,
+  resolveActivityEstimate,
+  type WeightSource,
+} from "@/bff/modules/foodDiary/activityEstimateFlow";
 import type {
   FoodDiaryHud,
   FoodDiaryPlanRecord,
@@ -51,6 +56,7 @@ import type {
   CreateActivityInput,
   CreateEntryDraftInput,
   DailyCalorieTargetRecord,
+  EstimateActivityRequest,
   DayQueryOptions,
   FoodDiaryDeleteResponse,
   FoodDiaryEntryRecord,
@@ -332,6 +338,74 @@ export class FoodDiaryService {
     });
 
     return { activity: mapActivityToView(record) };
+  }
+
+  /* ─── Estimativa de atividade por descrição (IA interpreta · regra estima) ─── */
+
+  async estimateActivity(
+    identity: CurrentUserIdentity,
+    input: EstimateActivityRequest,
+  ): Promise<ActivityEstimateOutcome> {
+    const description = input.description.trim();
+
+    if (description.length < 3) {
+      throw new ApiError(
+        400,
+        "food_diary_activity_description_required",
+        "Descreva sua atividade para estimar o gasto.",
+      );
+    }
+
+    // Peso resolvido server-side (ou informado no fluxo). NUNCA de outro usuário.
+    const weight = await this.resolveActivityWeight(identity.userId, input.weightKg);
+
+    // A IA apenas INTERPRETA (mapeia p/ atividade curada + duração/distância). Não
+    // devolve kcal/MET — quem estima é o módulo determinístico via resolveActivityEstimate.
+    const aiClient = this.deps.aiClientFactory();
+    const ai = await aiClient.interpretActivity({ description });
+
+    return resolveActivityEstimate({
+      interpretation: ai.interpretation,
+      weightKg: weight?.weightKg ?? null,
+      weightSource: weight?.source ?? null,
+      forceExtra: Boolean(input.forceExtra),
+    });
+  }
+
+  /**
+   * Melhor peso disponível para a estimativa, do usuário atual apenas:
+   * informado agora → último Scan → snapshot do plano → student_profile. Fora da faixa
+   * plausível (30–400 kg) é descartado. Retorna null quando não há peso confiável.
+   */
+  private async resolveActivityWeight(
+    userId: string,
+    informed: number | undefined,
+  ): Promise<{ weightKg: number; source: WeightSource } | null> {
+    if (informed !== undefined && isPlausibleWeight(informed)) {
+      return { weightKg: Math.round(informed * 10) / 10, source: "informed" };
+    }
+
+    const [scan, plan, profileWeight] = await Promise.all([
+      this.foodDiaryRepository.findLatestScanTmbForUser(userId),
+      this.foodDiaryRepository.findActivePlan(userId),
+      this.foodDiaryRepository.findStudentProfileWeightKg(userId),
+    ]);
+
+    const scanWeight = scan?.weightKg ?? null;
+    if (scanWeight !== null && isPlausibleWeight(scanWeight)) {
+      return { weightKg: scanWeight, source: "scan" };
+    }
+
+    const planWeight = plan ? parseSnapshot(plan.tmb_input).weightKg : null;
+    if (planWeight !== null && isPlausibleWeight(planWeight)) {
+      return { weightKg: planWeight, source: "plan" };
+    }
+
+    if (profileWeight !== null && isPlausibleWeight(profileWeight)) {
+      return { weightKg: profileWeight, source: "profile" };
+    }
+
+    return null;
   }
 
   async removeActivity(
@@ -965,6 +1039,11 @@ function toNumberOrNull(value: number | string | null): number | null {
 
 function roundKcal(value: number): number {
   return Math.round(value);
+}
+
+/** Plausible human weight for an activity estimate — guards against junk/other data. */
+function isPlausibleWeight(value: number): boolean {
+  return Number.isFinite(value) && value >= 30 && value <= 400;
 }
 
 function round1(value: number): number {

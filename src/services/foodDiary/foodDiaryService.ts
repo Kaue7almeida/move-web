@@ -1,8 +1,10 @@
+import type { ActivityEstimateOutcome } from "@/bff/modules/foodDiary/activityEstimateFlow";
 import type {
   ActivityEnergyResponse,
   CalorieTargetResponse,
   CreateActivityInput,
   CreateEntryDraftInput,
+  EstimateActivityRequest,
   FoodDiaryDeleteResponse,
   FoodDiaryEntryResponse,
   FoodDiaryHistoryResponse,
@@ -163,6 +165,26 @@ export async function addActivity(input: CreateActivityInput): Promise<ActivityE
   }
 
   return (await response.json()) as ActivityEnergyResponse;
+}
+
+/**
+ * Estima o gasto EXTRA de uma atividade descrita (IA interpreta + regra determinística).
+ * NÃO persiste: o resultado alimenta a revisão; a confirmação usa addActivity.
+ */
+export async function estimateActivity(
+  input: EstimateActivityRequest,
+): Promise<ActivityEstimateOutcome> {
+  const response = await authenticatedFetch("/api/v1/food-diary/activities/estimate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    await throwFoodDiaryApiError(response, "Não foi possível estimar a atividade.");
+  }
+
+  return (await response.json()) as ActivityEstimateOutcome;
 }
 
 export async function removeActivity(activityId: string): Promise<FoodDiaryDeleteResponse> {

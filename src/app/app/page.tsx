@@ -340,11 +340,9 @@ function RecentActivityCard({
 function StudentDailyHome({
   checklist,
   completedSessionCount,
-  foodDiaryEnabled,
 }: {
   checklist: ChecklistSummary;
   completedSessionCount: number;
-  foodDiaryEnabled: boolean;
 }) {
   const [summary, setSummary] = useState<StudentHomeSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -442,10 +440,6 @@ function StudentDailyHome({
         </div>
       </div>
 
-      {/* Diário Alimentar — bloco de alta relevância (hero secundário do dia).
-          Beta-gated: só aparece para quem tem o Diário habilitado (FOOD_DIARY_BETA_EMAILS). */}
-      {foodDiaryEnabled ? <DiaryHomeCard /> : null}
-
       {/* Scan corporal — módulo em destaque */}
       <Link
         href="/app/scan"
@@ -494,10 +488,11 @@ function StudentHome() {
           name={greetingName}
           subtitle="Seu espaço está pronto para treinar."
         />
+        {/* Diário como PROTAGONISTA do aluno beta — logo após o Greeting. */}
+        {me.foodDiaryEnabled && <DiaryHomeCard variant="spotlight" />}
         <StudentDailyHome
           checklist={checklist}
           completedSessionCount={me.studentStats?.completedSessionCount ?? 0}
-          foodDiaryEnabled={me.foodDiaryEnabled}
         />
       </div>
     );
@@ -510,6 +505,9 @@ function StudentHome() {
         name={greetingName}
         subtitle="Complete seu perfil para aproveitar melhor o Move."
       />
+
+      {/* Diário como PROTAGONISTA do aluno beta — também na Home em checklist. */}
+      {me.foodDiaryEnabled && <DiaryHomeCard variant="spotlight" />}
 
       {/* Metrics strip */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">

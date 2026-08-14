@@ -656,6 +656,22 @@ export class FoodDiaryRepository implements IFoodDiaryRepository {
     };
   }
 
+  async findStudentProfileWeightKg(userId: string): Promise<number | null> {
+    const { data, error } = await this.supabase
+      .from("student_profiles")
+      .select("weight_kg")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) {
+      throw DB_QUERY_FAILED;
+    }
+
+    const weight = data?.weight_kg;
+
+    return typeof weight === "number" && Number.isFinite(weight) ? weight : null;
+  }
+
   /* ─── storage: food-diary-photos (private bucket) ─── */
 
   async uploadPhotoObject(path: string, body: ArrayBuffer, contentType: string): Promise<void> {
