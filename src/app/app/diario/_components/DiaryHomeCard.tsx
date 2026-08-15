@@ -26,6 +26,10 @@ type LoadState =
 
 type Variant = "default" | "spotlight";
 
+function clampPct(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
+}
+
 export function DiaryHomeCard({ variant = "default" }: { variant?: Variant }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
 
@@ -79,6 +83,13 @@ export function DiaryHomeCard({ variant = "default" }: { variant?: Variant }) {
   const head = homeHeadline(hud);
   const hasMeals = today.meals.length > 0;
 
+  // Mini medidor (spotlight): posições presentation-only, não recalcula energia.
+  const scaleMax = Math.max(hud.bandHighKcal * 1.18, hud.consumedKcal * 1.08, 1);
+  const belowPct = clampPct((hud.bandLowKcal / scaleMax) * 100);
+  const bandPct = clampPct(((hud.bandHighKcal - hud.bandLowKcal) / scaleMax) * 100);
+  const abovePct = clampPct(100 - belowPct - bandPct);
+  const consumedPct = clampPct((hud.consumedKcal / scaleMax) * 100);
+
   return (
     <Link
       href="/app/diario"
@@ -100,7 +111,27 @@ export function DiaryHomeCard({ variant = "default" }: { variant?: Variant }) {
         {hud.missionLabel}
       </p>
 
-      <div className="mt-2 flex items-end justify-between gap-3">
+      {spotlight && (
+        <div className="relative mt-3">
+          <div
+            className={[
+              "flex h-2.5 w-full overflow-hidden rounded-full bg-surface-strong",
+              hud.status === "within" ? "dia-within-glow" : "",
+            ].join(" ")}
+          >
+            <div className="h-full bg-transparent" style={{ width: `${belowPct}%` }} aria-hidden="true" />
+            <div className="h-full bg-success/45" style={{ width: `${bandPct}%` }} aria-hidden="true" />
+            <div className="h-full bg-accent/25" style={{ width: `${abovePct}%` }} aria-hidden="true" />
+          </div>
+          <span
+            className="dia-gauge-marker absolute inset-y-[-2px] w-1.5 rounded-full bg-foreground ring-2 ring-surface"
+            style={{ left: `calc(${consumedPct}% - 3px)` }}
+            aria-hidden="true"
+          />
+        </div>
+      )}
+
+      <div className="mt-3 flex items-end justify-between gap-3">
         <div className="min-w-0">
           {head.kind === "within" ? (
             <p className={spotlight ? "font-display text-[22px] font-bold text-foreground" : "text-[15px] font-bold text-foreground"}>

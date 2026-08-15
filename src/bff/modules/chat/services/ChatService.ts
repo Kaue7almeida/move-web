@@ -979,6 +979,7 @@ export class ChatService {
 
   async sendMoveAiMessage(
     userId: string,
+    email: string | null,
     input: SendMoveAiMessageInput,
   ): Promise<ChatMessage> {
     const conversation = await this.chatRepository.findConversationByIdForUser(
@@ -1010,6 +1011,7 @@ export class ChatService {
         input.contextTrigger.id,
         {
           userId,
+          email,
           entityId: input.contextTrigger.entityId,
           visibleMessage,
         },
@@ -1041,6 +1043,7 @@ export class ChatService {
       if (active) {
         persistentContextForPrompt = await this.resolvePersistentContext(
           userId,
+          email,
           active,
           persistedContent,
         );
@@ -1261,12 +1264,14 @@ export class ChatService {
    */
   private async resolvePersistentContext(
     userId: string,
+    email: string | null,
     active: { id: string; entityId: string },
     visibleMessage: string,
   ): Promise<string | null> {
     try {
       const result = await this.contextTriggerResolver.resolve(active.id, {
         userId,
+        email,
         entityId: active.entityId,
         visibleMessage,
       });

@@ -178,16 +178,78 @@
   animation: dia-shimmer 1.3s linear infinite;
 }
 
+/* Entrada em cascata (stagger) dos blocos de uma tela. */
+.dia-stagger > * {
+  animation: dia-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.dia-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.dia-stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.dia-stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.dia-stagger > *:nth-child(4) { animation-delay: 0.17s; }
+.dia-stagger > *:nth-child(5) { animation-delay: 0.22s; }
+.dia-stagger > *:nth-child(6) { animation-delay: 0.27s; }
+.dia-stagger > *:nth-child(7) { animation-delay: 0.32s; }
+.dia-stagger > *:nth-child(n + 8) { animation-delay: 0.36s; }
+
+/* Medidor do HUD — faixa e marcador deslizam suavemente ao carregar/atualizar. */
+.dia-gauge-fill {
+  transition: width 0.9s cubic-bezier(0.34, 1.2, 0.5, 1), left 0.9s cubic-bezier(0.34, 1.2, 0.5, 1);
+}
+.dia-gauge-marker {
+  transition: left 1s cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+
+/* Glow/pulso sutil quando o consumo está DENTRO da faixa (progresso saudável). */
+@keyframes dia-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--success-soft); }
+  50% { box-shadow: 0 0 16px 1px var(--success-soft); }
+}
+.dia-within-glow {
+  animation: dia-glow 2.8s ease-in-out infinite;
+}
+
+/* Resposta tátil de cards selecionáveis. */
+.dia-selectable {
+  transition: transform 0.12s ease, border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dia-selectable:active {
+  transform: scale(0.98);
+}
+
+/* Input premium: borda/foco com contraste real (funciona em light e dark). */
+.dia-field {
+  font-size: 16px;
+  background-color: var(--background);
+  border: 1px solid var(--border-strong);
+  border-radius: 0.625rem;
+  color: var(--foreground);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dia-field::placeholder {
+  color: var(--muted);
+}
+.dia-field:focus,
+.dia-field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dia-rise,
   .dia-pop,
   .dia-check-spring,
   .dia-grow-y,
-  .dia-box-pop {
+  .dia-box-pop,
+  .dia-stagger > *,
+  .dia-within-glow {
     animation: none;
   }
 
-  .dia-ring-arc {
+  .dia-ring-arc,
+  .dia-gauge-fill,
+  .dia-gauge-marker,
+  .dia-selectable {
     transition: none;
   }
 

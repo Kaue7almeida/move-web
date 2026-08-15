@@ -255,7 +255,7 @@ export function ActivityFlow({ onSaved, onDone }: { onSaved: () => void; onDone:
               value={watchLabel}
               placeholder="Ex.: corrida, spinning…"
               onChange={(event) => setWatchLabel(event.target.value)}
-              className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-[15px] text-foreground placeholder:text-muted"
+              className="dia-field mt-1 h-12 w-full px-3.5"
             />
           </label>
           <label className="block">
@@ -267,7 +267,7 @@ export function ActivityFlow({ onSaved, onDone }: { onSaved: () => void; onDone:
               value={watchKcal}
               placeholder="Ex.: 320"
               onChange={(event) => setWatchKcal(event.target.value)}
-              className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-[15px] font-semibold text-foreground placeholder:font-normal placeholder:text-muted"
+              className="dia-field mt-1 h-12 w-full px-3.5 font-semibold"
             />
           </label>
         </div>
@@ -329,7 +329,7 @@ export function ActivityFlow({ onSaved, onDone }: { onSaved: () => void; onDone:
           onChange={(event) => setDescription(event.target.value)}
           rows={3}
           placeholder="Ex.: caminhei 4 km em 50 min"
-          className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-[15px] text-foreground placeholder:text-muted"
+          className="dia-field w-full px-3.5 py-3 leading-relaxed"
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
           {EXAMPLES.map((example) => (
@@ -474,7 +474,7 @@ function ClarifyStep({
           }
         }}
         placeholder={isWeight ? "Ex.: 80" : "Sua resposta"}
-        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-[15px] text-foreground placeholder:text-muted"
+        className="dia-field h-12 w-full px-3.5"
       />
 
       <button
@@ -503,7 +503,7 @@ function OptionCard({
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-3.5 rounded-xl border border-border bg-surface p-4 text-left transition-colors hover:border-accent/40 hover:bg-surface-hover"
+      className="dia-selectable group flex w-full items-center gap-3.5 rounded-xl border border-border bg-surface p-4 text-left hover:border-accent/40 hover:bg-surface-hover"
     >
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
         <Icon size={20} strokeWidth={1.8} />

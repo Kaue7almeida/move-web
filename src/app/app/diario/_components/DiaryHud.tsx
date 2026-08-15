@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Check, Flame, HelpCircle, Target, Zap } from "lucide-react";
 
 import type { FoodDiaryHud } from "@/bff/modules/foodDiary/types/plan";
@@ -41,6 +42,15 @@ export function DiaryHud({ hud, onExplain }: { hud: FoodDiaryHud; onExplain: () 
 
   const toEnter = Math.max(hud.bandLowKcal - hud.consumedKcal, 0);
 
+  // Marcador desliza da borda até a posição real no load/atualização (rAF evita
+  // set-state-síncrono em efeito e respeita prefers-reduced-motion via CSS).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  const markerPct = mounted ? consumedPct : 0;
+
   return (
     <section className="dia-rise space-y-5 rounded-2xl border border-border bg-surface p-5 sm:p-6">
       {/* Missão + status */}
@@ -65,8 +75,8 @@ export function DiaryHud({ hud, onExplain }: { hud: FoodDiaryHud; onExplain: () 
         <div className="relative pt-7">
           {/* Marcador "Você · X kcal" */}
           <div
-            className="absolute top-0 -translate-x-1/2 whitespace-nowrap"
-            style={{ left: `${markerAnchor(consumedPct)}%` }}
+            className="dia-gauge-marker absolute top-0 -translate-x-1/2 whitespace-nowrap"
+            style={{ left: `${markerAnchor(markerPct)}%` }}
           >
             <span className="rounded-full bg-foreground px-2.5 py-1 text-[12px] font-bold text-background shadow-sm">
               Você · {formatKcal(hud.consumedKcal)} kcal
@@ -76,7 +86,12 @@ export function DiaryHud({ hud, onExplain }: { hud: FoodDiaryHud; onExplain: () 
 
           {/* Barra: abaixo | faixa | acima (marcador fica fora do overflow p/ sobressair) */}
           <div className="relative">
-            <div className="flex h-3.5 w-full overflow-hidden rounded-full bg-surface-strong">
+            <div
+              className={[
+                "flex h-3.5 w-full overflow-hidden rounded-full bg-surface-strong",
+                hud.status === "within" ? "dia-within-glow" : "",
+              ].join(" ")}
+            >
               <div className="h-full bg-transparent" style={{ width: `${belowPct}%` }} aria-hidden="true" />
               <div className="h-full bg-success/35" style={{ width: `${bandPct}%` }} aria-hidden="true" />
               <div className="h-full bg-accent/20" style={{ width: `${abovePct}%` }} aria-hidden="true" />
@@ -86,8 +101,8 @@ export function DiaryHud({ hud, onExplain }: { hud: FoodDiaryHud; onExplain: () 
             </div>
             {/* Marcador "Você" */}
             <span
-              className="absolute inset-y-[-3px] w-1.5 rounded-full bg-foreground ring-2 ring-surface"
-              style={{ left: `calc(${consumedPct}% - 3px)` }}
+              className="dia-gauge-marker absolute inset-y-[-3px] w-1.5 rounded-full bg-foreground ring-2 ring-surface"
+              style={{ left: `calc(${markerPct}% - 3px)` }}
               aria-hidden="true"
             />
           </div>

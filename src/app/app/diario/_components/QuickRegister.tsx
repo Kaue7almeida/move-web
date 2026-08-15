@@ -116,7 +116,7 @@ function Option({
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-3.5 rounded-xl border border-border bg-surface p-4 text-left transition-colors hover:border-accent/40 hover:bg-surface-hover"
+      className="dia-selectable group flex w-full items-center gap-3.5 rounded-xl border border-border bg-surface p-4 text-left hover:border-accent/40 hover:bg-surface-hover"
     >
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-muted text-accent">
         <Icon size={20} strokeWidth={1.8} />

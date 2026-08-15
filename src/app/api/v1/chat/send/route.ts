@@ -26,7 +26,11 @@ export async function POST(request: Request) {
     const authContext = await ensureAuthenticated(request);
     const body = await readSendMoveAiMessageBody(request);
     const chatService = makeChatService();
-    const message = await chatService.sendMoveAiMessage(authContext.userId, body);
+    const message = await chatService.sendMoveAiMessage(
+      authContext.userId,
+      authContext.email ?? null,
+      body,
+    );
 
     return NextResponse.json({ message });
   } catch (error: unknown) {

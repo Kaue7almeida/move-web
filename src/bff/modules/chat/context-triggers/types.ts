@@ -11,6 +11,12 @@
 export type ChatContextTriggerInput = {
   /** Authenticated user id (resolved from the request, never from the body). */
   userId: string;
+  /**
+   * Authenticated e-mail (resolved from the request/session, never from the body).
+   * Used by triggers that gate on an allowlist (e.g. the Food Diary beta) so the
+   * generic chat endpoint can never bypass that boundary. null when unavailable.
+   */
+  email: string | null;
   /** Opaque entity id sent by the front (e.g. a student workout id). */
   entityId: string;
   /** The simple, user-facing message that will be stored in the chat. */
