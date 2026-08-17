@@ -133,15 +133,15 @@ export default function DiaryPage() {
     void loadHistory();
   }, [loadHistory]);
 
-  // Beta gate: o Diário é uma feature pessoal, disponível para qualquer papel
-  // (aluno ou personal) cujo e-mail esteja na allowlist (FOOD_DIARY_BETA_EMAILS).
-  // A fronteira de segurança real é o guard da API; isto apenas bloqueia a página
-  // visual para as demais contas.
+  // Acesso ao Diário: feature pessoal, disponível para qualquer papel autenticado
+  // (GA). A fronteira de segurança real é o guard da API; isto apenas reflete o
+  // me.foodDiaryEnabled resolvido no servidor (aberto a todos, salvo restrição
+  // emergencial via FOOD_DIARY_RESTRICT_EMAILS).
   if (!enabled) {
     return (
       <RoleGuard
         title="Diário Alimentar"
-        description="O Diário Alimentar ainda está em teste fechado (beta) e não está disponível no seu acesso."
+        description="O Diário Alimentar não está disponível no seu acesso no momento."
       />
     );
   }
