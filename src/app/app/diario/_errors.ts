@@ -121,8 +121,8 @@ const BY_CODE: Record<string, FoodDiaryErrorInfo> = {
 
   /* Beta / acesso */
   food_diary_access_required: {
-    title: "Recurso em beta",
-    message: "O Diário Alimentar ainda está em teste fechado e não está disponível para a sua conta.",
+    title: "Diário indisponível",
+    message: "O Diário Alimentar não está disponível no seu acesso no momento.",
     retake: false,
     retryable: false,
   },

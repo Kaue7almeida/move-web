@@ -1,5 +1,5 @@
 import { ApiError } from "@/bff/core/errors/ApiError";
-import { isFoodDiaryBetaEmail } from "@/bff/core/auth/foodDiaryBetaAccess";
+import { isFoodDiaryEnabledForUser } from "@/bff/core/auth/foodDiaryBetaAccess";
 import { resolveTimeZone } from "@/bff/modules/foodDiary/diaryDay";
 import {
   buildFoodDiaryContextBlock,
@@ -18,8 +18,9 @@ import type {
  * últimos 7 dias) do USUÁRIO AUTENTICADO e monta o conteúdo enriquecido (oculto).
  *
  * Segurança:
- *  • Beta gate SERVER-SIDE: exige e-mail na allowlist (FOOD_DIARY_BETA_EMAILS),
- *    idêntico ao ensureFoodDiaryAccess — o endpoint genérico do Chat NÃO vira bypass.
+ *  • Access gate SERVER-SIDE: mesma regra do ensureFoodDiaryAccess
+ *    (isFoodDiaryEnabledForUser) — o endpoint genérico do Chat NÃO vira bypass do
+ *    acesso do Diário.
  *  • Ownership sempre pelo userId/email autenticados (nunca do body). O front manda
  *    apenas o fuso (entityId) como locator; o BFF resolve os dados reais.
  */
@@ -29,7 +30,7 @@ export class FoodDiaryUnderstandDayTrigger implements ChatContextTriggerBuilder 
   constructor(private readonly foodDiaryService: FoodDiaryService) {}
 
   async build(input: ChatContextTriggerInput): Promise<ChatContextTriggerResult> {
-    if (!isFoodDiaryBetaEmail(input.email)) {
+    if (!isFoodDiaryEnabledForUser(input.email)) {
       throw new ApiError(
         403,
         "food_diary_access_required",
